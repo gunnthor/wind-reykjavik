@@ -1,0 +1,294 @@
+/* Shared string table — imported by the browser and by server.mjs, which uses it
+   to fill {{token}} placeholders in index.html before serving. Filling them
+   server-side means the page arrives already in the right language instead of
+   flashing English first.
+
+   Placeholders inside strings use {name}. */
+
+export const LANGS = ['is', 'en'];
+export const DEFAULT_LANG = 'en';
+
+export const STRINGS = {
+  is: {
+    'page.title': 'Vindur yfir höfuðborgarsvæðinu',
+    'app.title': 'Vindur yfir höfuðborgarsvæðinu',
+    'app.subtitle': 'Beint vindflæði · DMI Harmonie 2 km · stöðvar Veðurstofunnar',
+    'app.mapLabel': 'Vindakort af höfuðborgarsvæðinu',
+    'app.panelLabel': 'Gagnaspjald',
+
+    'tab.now': 'Núna',
+    'tab.layers': 'Lög',
+    'tab.accuracy': 'Nákvæmni',
+
+    'hero.observed': 'Reykjavík · mælt',
+    'hero.model': 'Reykjavík · líkan {when}',
+    'hero.waiting': 'bíð eftir gögnum…',
+    'hero.meta': '{dir} · hviða {gust} m/s · {bf} vindstig',
+    'hero.foot': '{name} · {desc} · líkanið segir {model} m/s',
+    'hero.footForecast': '{name} · {desc} · spá, ekki mæling',
+
+    'tile.region': 'Yfir svæðið',
+    'tile.regionSub': '{n} stöðvar senda',
+    'tile.gust': 'Mesta hviða',
+    'tile.cloud': 'Skýjahula',
+    'tile.precip': 'Úrkoma',
+    'tile.temp': 'Hiti',
+    'tile.gustFactor': 'Hviðustuðull',
+    'tile.modelRvk': 'líkan · Reykjavík',
+    'tile.modelPoints': 'líkan, á stöðvarpunktum',
+    'tile.meanStations': 'meðaltal stöðva',
+    'tile.gustOverWind': 'hviða ÷ meðalvindur',
+    'tile.asSnow': 'fellur sem snjór · líkan',
+
+    'sect.stations': 'Stöðvar',
+    'sect.overlays': 'Lög',
+    'sect.animation': 'Hreyfing',
+    'sect.model': 'Líkan',
+
+    'count.live': '{n} af {m} virkar',
+    'count.modelPoints': '{n} punktar · líkan',
+
+    'note.obs': 'Mælt {time} UTC · {source}. Gildin eru 10 mínútna meðalvindur / mesta hviða í m/s.',
+    'note.model': 'Sýnir <b>líkanið</b> kl. {when} UTC, tekið á hnitum hverrar stöðvar — engin mæling er til fyrir framtíðina. Ýttu á <b>Núna</b> fyrir rauntímamælingar.',
+
+    'layer.particles': 'Vindflæði',
+    'layer.particles.d': 'agnir sem berast með sviðinu',
+    'layer.speed': 'Hraðasvið',
+    'layer.speed.d': 'samfelldur vindhraði í 10 m hæð',
+    'layer.gusts': 'Hviðuviðvaranir',
+    'layer.gusts.d': 'hviður líkans yfir 20 / 28 / 35 m/s',
+    'layer.cloud': 'Skýjahula',
+    'layer.cloud.d': 'heildarskýjahula',
+    'layer.precip': 'Úrkoma',
+    'layer.precip.d': 'ákefð regns og snjókomu',
+    'layer.stations': 'Stöðvar',
+    'layer.stations.d': 'beinar mælingar Veðurstofunnar',
+
+    'slider.particles': 'Agnir',
+    'slider.flow': 'Flæðihraði',
+    'slider.trail': 'Slóðalengd',
+    'slider.rateUnit': 'px/s á m/s',
+    'slider.note': 'Hreyfing agnanna er <em>ýkt</em> svo flæðið sjáist í fljótu bragði — stefna og hlutfallslegur hraði fylgja líkaninu, en ekki hraðinn á klukkunni.',
+
+    'model.model': 'Líkan',
+    'model.grid': 'Reitanet',
+    'model.gridVal': '{nlat} × {nlon} = {n} punktar, ~{km} km',
+    'model.terrain': 'Landhæð í neti',
+    'model.window': 'Tímabil',
+    'model.fetched': 'Sótt',
+
+    'acc.title': 'Líkan og raunveruleiki, núna',
+    'acc.note': 'Hver stöð hér að neðan er borin saman við sama líkan, tekið á nákvæmum hnitum stöðvarinnar. Jákvæð skekkja = líkanið of hvasst.',
+    'acc.perStation': 'Eftir stöðvum',
+    'acc.biasOverTime': 'Skekkja yfir tíma',
+    'acc.biasNote': 'Safnast upp á meðan þjónninn keyrir — einn punktur fyrir hverja klukkustundarmælingu.',
+    'acc.biasNoteLatest': 'Meðalskekkja líkans − mælingar á öllum virkum stöðvum. Nýjast {v} m/s.',
+    'acc.noRounds': 'engar umferðir skráðar enn',
+    'acc.oneRound': 'ein umferð skráð — vantar aðra',
+    'acc.rounds': '{n} umferðir',
+    'acc.now': 'núna',
+    'acc.windMAE': 'Vindur, meðalfrávik',
+    'acc.gustMAE': 'Hviður, meðalfrávik',
+    'acc.dirMAE': 'Vindátt, meðalfrávik',
+    'acc.tempMAE': 'Hiti, meðalfrávik',
+    'acc.biasN': 'skekkja {bias} · n={n}',
+
+    'flag.close': 'nálægt',
+    'flag.fair': 'þokkalegt',
+    'flag.poor': 'slakt',
+
+    'th.station': 'Stöð',
+    'th.obs': 'Mælt',
+    'th.model': 'Líkan',
+    'th.delta': 'Δ',
+    'th.dirDelta': 'Δ átt',
+
+    'legend.title': 'Vindhraði',
+    'legend.hint': 'Örvar vísa undan vindi · bjartara = hvassara',
+    'legend.rain': 'regn',
+    'legend.snow': 'snjór',
+    'legend.cloud': 'ský',
+    'legend.gustTier': 'hviða ≥{v}',
+
+    'time.now': 'Núna',
+    'time.play': 'Spila spá',
+    'time.label': 'Spátími',
+    'time.isNow': 'núna',
+
+    'pop.wind': 'Vindur',
+    'pop.gust': 'Hviða',
+    'pop.dir': 'Átt',
+    'pop.temp': 'Hiti',
+    'pop.rh': 'Raki',
+    'pop.pressure': 'Þrýst.',
+    'pop.rain': 'Úrkoma',
+    'pop.cloud': 'Ský',
+    'pop.masl': '{v} m y.s.',
+    'pop.offline': 'ekki virk',
+    'pop.beaufort': '{n} vindstig, {desc}',
+    'pop.forecast': 'spá líkans · {when} UTC',
+    'pop.forecastNote': 'Engin mæling er til fyrir framtíðarstund — þetta er líkanið tekið á hnitum stöðvarinnar.',
+    'pop.modelTag': '(líkan)',
+
+    'toast.backToNow': 'Aftur á núið',
+    'toast.refreshed': 'Vindsvið uppfært',
+    'toast.gridFail': 'Náði ekki í vindsviðið: {err}',
+    'toast.obsFail': 'Mælingar ekki tiltækar: {err}',
+
+    'lang.switch': 'EN',
+    'lang.switchTitle': 'Switch to English',
+
+    beaufort: ['logn', 'andvari', 'kul', 'gola', 'stinningsgola', 'kaldi', 'stinningskaldi',
+               'allhvasst', 'hvassviðri', 'stormur', 'rok', 'ofsaveður', 'fárviðri'],
+    compass: ['N', 'NNA', 'NA', 'ANA', 'A', 'ASA', 'SA', 'SSA',
+              'S', 'SSV', 'SV', 'VSV', 'V', 'VNV', 'NV', 'NNV'],
+    days: ['sun', 'mán', 'þri', 'mið', 'fim', 'fös', 'lau'],
+    locale: 'is-IS',
+  },
+
+  en: {
+    'page.title': 'Wind over Reykjavík',
+    'app.title': 'Wind over Reykjavík',
+    'app.subtitle': 'Live wind flow · DMI Harmonie 2 km · Veðurstofan stations',
+    'app.mapLabel': 'Wind map of the Reykjavík capital region',
+    'app.panelLabel': 'Data panel',
+
+    'tab.now': 'Now',
+    'tab.layers': 'Layers',
+    'tab.accuracy': 'Accuracy',
+
+    'hero.observed': 'Reykjavík · observed',
+    'hero.model': 'Reykjavík · model {when}',
+    'hero.waiting': 'waiting for data…',
+    'hero.meta': '{dir} · gust {gust} m/s · Beaufort {bf}',
+    'hero.foot': '{name} · {desc} · model says {model} m/s',
+    'hero.footForecast': '{name} · {desc} · forecast, not an observation',
+
+    'tile.region': 'Across the region',
+    'tile.regionSub': '{n} stations reporting',
+    'tile.gust': 'Strongest gust',
+    'tile.cloud': 'Cloud cover',
+    'tile.precip': 'Precipitation',
+    'tile.temp': 'Temperature',
+    'tile.gustFactor': 'Gust factor',
+    'tile.modelRvk': 'model · Reykjavík',
+    'tile.modelPoints': 'model, station points',
+    'tile.meanStations': 'mean of stations',
+    'tile.gustOverWind': 'gust ÷ mean wind',
+    'tile.asSnow': 'falling as snow · model',
+
+    'sect.stations': 'Stations',
+    'sect.overlays': 'Overlays',
+    'sect.animation': 'Animation',
+    'sect.model': 'Model',
+
+    'count.live': '{n} of {m} live',
+    'count.modelPoints': '{n} points · model',
+
+    'note.obs': 'Observed {time} UTC · {source}. Values are 10-minute mean wind / peak gust in m/s.',
+    'note.model': 'Showing the <b>model</b> at {when} UTC, sampled at each station’s coordinates — no observation exists for a future hour. Press <b>Now</b> for live readings.',
+
+    'layer.particles': 'Wind flow',
+    'layer.particles.d': 'animated particles advected by the field',
+    'layer.speed': 'Speed field',
+    'layer.speed.d': 'continuous 10 m wind speed',
+    'layer.gusts': 'Gust warnings',
+    'layer.gusts.d': 'model gusts above 20 / 28 / 35 m/s',
+    'layer.cloud': 'Cloud cover',
+    'layer.cloud.d': 'total cloud fraction',
+    'layer.precip': 'Precipitation',
+    'layer.precip.d': 'rain and snow rate',
+    'layer.stations': 'Stations',
+    'layer.stations.d': 'live Veðurstofan observations',
+
+    'slider.particles': 'Particles',
+    'slider.flow': 'Flow speed',
+    'slider.trail': 'Trail length',
+    'slider.rateUnit': 'px/s per m/s',
+    'slider.note': 'Particle motion is <em>exaggerated</em> so the flow reads at a glance — direction and relative speed are true to the model, the wall-clock rate is not.',
+
+    'model.model': 'Model',
+    'model.grid': 'Grid',
+    'model.gridVal': '{nlat} × {nlon} = {n} points, ~{km} km',
+    'model.terrain': 'Terrain in grid',
+    'model.window': 'Window',
+    'model.fetched': 'Fetched',
+
+    'acc.title': 'Model vs. reality, right now',
+    'acc.note': 'Every station below is compared against the same model, sampled at that station’s exact coordinates. Positive bias = model too windy.',
+    'acc.perStation': 'Per station',
+    'acc.biasOverTime': 'Bias over time',
+    'acc.biasNote': 'Accumulates while the server runs — one point per hourly observation round.',
+    'acc.biasNoteLatest': 'Mean model−observed wind bias across all live stations. Latest {v} m/s.',
+    'acc.noRounds': 'no rounds logged yet',
+    'acc.oneRound': 'one round logged — needs a second',
+    'acc.rounds': '{n} rounds',
+    'acc.now': 'now',
+    'acc.windMAE': 'Wind MAE',
+    'acc.gustMAE': 'Gust MAE',
+    'acc.dirMAE': 'Direction MAE',
+    'acc.tempMAE': 'Temp MAE',
+    'acc.biasN': 'bias {bias} · n={n}',
+
+    'flag.close': 'close',
+    'flag.fair': 'fair',
+    'flag.poor': 'poor',
+
+    'th.station': 'Station',
+    'th.obs': 'Obs',
+    'th.model': 'Model',
+    'th.delta': 'Δ',
+    'th.dirDelta': 'Dir Δ',
+
+    'legend.title': 'Wind speed',
+    'legend.hint': 'Arrows point downwind · brighter = faster',
+    'legend.rain': 'rain',
+    'legend.snow': 'snow',
+    'legend.cloud': 'cloud',
+    'legend.gustTier': 'gust ≥{v}',
+
+    'time.now': 'Now',
+    'time.play': 'Play forecast',
+    'time.label': 'Forecast time',
+    'time.isNow': 'now',
+
+    'pop.wind': 'Wind',
+    'pop.gust': 'Gust',
+    'pop.dir': 'Dir',
+    'pop.temp': 'Temp',
+    'pop.rh': 'RH',
+    'pop.pressure': 'P',
+    'pop.rain': 'Rain',
+    'pop.cloud': 'Cloud',
+    'pop.masl': '{v} m a.s.l.',
+    'pop.offline': 'offline',
+    'pop.beaufort': 'Beaufort {n}, {desc}',
+    'pop.forecast': 'model forecast · {when} UTC',
+    'pop.forecastNote': 'No observation exists for a future hour — this is the model sampled at the station’s coordinates.',
+    'pop.modelTag': '(model)',
+
+    'toast.backToNow': 'Back to now',
+    'toast.refreshed': 'Wind field refreshed',
+    'toast.gridFail': 'Could not load the wind grid: {err}',
+    'toast.obsFail': 'Observations unavailable: {err}',
+
+    'lang.switch': 'IS',
+    'lang.switchTitle': 'Skipta yfir á íslensku',
+
+    beaufort: ['calm', 'light air', 'light breeze', 'gentle breeze', 'moderate breeze',
+               'fresh breeze', 'strong breeze', 'near gale', 'gale', 'strong gale',
+               'storm', 'violent storm', 'hurricane force'],
+    compass: ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+              'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'],
+    days: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+    locale: 'en-GB',
+  },
+};
+
+export function translate(lang, key, params) {
+  const dict = STRINGS[lang] ?? STRINGS[DEFAULT_LANG];
+  let s = dict[key];
+  if (s == null) s = STRINGS[DEFAULT_LANG][key] ?? key;
+  if (typeof s !== 'string' || !params) return s;
+  return s.replace(/\{(\w+)\}/g, (m, k) => (params[k] ?? m));
+}

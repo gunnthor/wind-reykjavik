@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="{{__lang__}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>{{page.title}}</title>
+<meta name="description" content="{{app.subtitle}}">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="map" aria-label="{{app.mapLabel}}"></div>
+
+<!-- ── Title card ─────────────────────────────────────────── -->
+<header id="titlecard">
+  <div class="tc-text">
+    <h1 data-i18n="app.title">{{app.title}}</h1>
+    <p class="sub" data-i18n="app.subtitle">{{app.subtitle}}</p>
+  </div>
+  <button id="langBtn" class="langbtn" data-i18n="lang.switch"
+          data-i18n-title="lang.switchTitle" title="{{lang.switchTitle}}">{{lang.switch}}</button>
+</header>
+
+<!-- ── Side panel ─────────────────────────────────────────── -->
+<aside id="panel" aria-label="{{app.panelLabel}}">
+  <nav class="tabs" role="tablist">
+    <button class="tab is-on" data-tab="now"      role="tab" aria-selected="true"  data-i18n="tab.now">{{tab.now}}</button>
+    <button class="tab"       data-tab="layers"   role="tab" aria-selected="false" data-i18n="tab.layers">{{tab.layers}}</button>
+    <button class="tab"       data-tab="accuracy" role="tab" aria-selected="false" data-i18n="tab.accuracy">{{tab.accuracy}}</button>
+  </nav>
+
+  <!-- NOW -->
+  <section class="pane is-on" data-pane="now">
+    <div class="hero">
+      <div class="hero-label">{{hero.observed}}</div>
+      <div class="hero-row">
+        <svg class="hero-arrow" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 22 L12 2 M12 2 L6 9 M12 2 L18 9" fill="none"
+                stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div>
+          <div class="hero-value"><span id="heroSpeed">–</span><span class="unit">m/s</span></div>
+          <div class="hero-meta" id="heroMeta">{{hero.waiting}}</div>
+        </div>
+      </div>
+      <div class="hero-foot" id="heroFoot"></div>
+    </div>
+
+    <div class="tiles" id="tiles"></div>
+
+    <h2 class="sect"><span data-i18n="sect.stations">{{sect.stations}}</span>
+      <span class="count" id="stnCount"></span></h2>
+    <div class="stationlist" id="stationList"></div>
+    <p class="note" id="obsNote"></p>
+  </section>
+
+  <!-- LAYERS -->
+  <section class="pane" data-pane="layers">
+    <h2 class="sect" data-i18n="sect.overlays">{{sect.overlays}}</h2>
+    <div class="layers" id="layerToggles"></div>
+
+    <h2 class="sect" data-i18n="sect.animation">{{sect.animation}}</h2>
+    <label class="slider">
+      <span><span data-i18n="slider.particles">{{slider.particles}}</span> <b id="densityVal"></b></span>
+      <input type="range" id="density" min="500" max="12000" step="500" value="5000">
+    </label>
+    <label class="slider">
+      <span><span data-i18n="slider.flow">{{slider.flow}}</span> <b id="rateVal"></b></span>
+      <input type="range" id="rate" min="1" max="25" step="1" value="12">
+    </label>
+    <label class="slider">
+      <span><span data-i18n="slider.trail">{{slider.trail}}</span> <b id="trailVal"></b></span>
+      <input type="range" id="trail" min="1" max="20" step="1" value="9">
+    </label>
+    <p class="note" data-i18n-html="slider.note">{{slider.note}}</p>
+
+    <h2 class="sect" data-i18n="sect.model">{{sect.model}}</h2>
+    <dl class="kv" id="modelInfo"></dl>
+  </section>
+
+  <!-- ACCURACY -->
+  <section class="pane" data-pane="accuracy">
+    <h2 class="sect" data-i18n="acc.title">{{acc.title}}</h2>
+    <p class="note" data-i18n="acc.note">{{acc.note}}</p>
+    <div class="scorecards" id="scorecards"></div>
+
+    <h2 class="sect" data-i18n="acc.perStation">{{acc.perStation}}</h2>
+    <div class="tablewrap">
+      <table class="cmp" id="cmpTable">
+        <thead>
+          <tr>
+            <th data-i18n="th.station">{{th.station}}</th>
+            <th data-i18n="th.obs">{{th.obs}}</th>
+            <th data-i18n="th.model">{{th.model}}</th>
+            <th data-i18n="th.delta">{{th.delta}}</th>
+            <th data-i18n="th.dirDelta">{{th.dirDelta}}</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <h2 class="sect" data-i18n="acc.biasOverTime">{{acc.biasOverTime}}</h2>
+    <div id="biasChart" class="biaschart"></div>
+    <p class="note" id="biasNote" data-i18n="acc.biasNote">{{acc.biasNote}}</p>
+  </section>
+</aside>
+
+<!-- ── Legend ─────────────────────────────────────────────── -->
+<div id="legend">
+  <div class="legend-title"><span data-i18n="legend.title">{{legend.title}}</span>
+    <span class="unit">m/s</span></div>
+  <div class="ramp" id="ramp"></div>
+  <div class="ramp-ticks" id="rampTicks"></div>
+  <div class="legend-warn" id="legendWarn"></div>
+</div>
+
+<!-- ── Time scrubber ──────────────────────────────────────── -->
+<div id="timebar">
+  <button id="playBtn" class="tbtn" data-i18n-aria="time.play" aria-label="{{time.play}}">▶</button>
+  <button id="nowBtn" class="tbtn wide" data-i18n="time.now">{{time.now}}</button>
+  <input type="range" id="timeSlider" min="0" max="0" step="0.25" value="0"
+         data-i18n-aria="time.label" aria-label="{{time.label}}">
+  <div class="tlabel"><b id="timeLabel">–</b><span id="timeRel"></span></div>
+</div>
+
+<div id="toast" role="status"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="app.js" type="module"></script>
+</body>
+</html>

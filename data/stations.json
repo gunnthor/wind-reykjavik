@@ -1,0 +1,154 @@
+[
+ {
+  "id": 31109,
+  "slug": "arnve",
+  "name": "Arnarnesvegur",
+  "lat": 64.0888,
+  "lon": -21.8366,
+  "elev": 116.4
+ },
+ {
+  "id": 31475,
+  "slug": "kaupt",
+  "name": "Garðabær - Kauptún",
+  "lat": 64.0797,
+  "lon": -21.9029,
+  "elev": 42.0
+ },
+ {
+  "id": 1474,
+  "slug": "uholt",
+  "name": "Garðabær Urriðaholt",
+  "lat": 64.0712,
+  "lon": -21.9107,
+  "elev": 37.0
+ },
+ {
+  "id": 1480,
+  "slug": "geldn",
+  "name": "Geldinganes",
+  "lat": 64.1678,
+  "lon": -21.8038,
+  "elev": 35.0
+ },
+ {
+  "id": 1481,
+  "slug": "holms",
+  "name": "Hólmsheiði",
+  "lat": 64.1085,
+  "lon": -21.6864,
+  "elev": 130.0
+ },
+ {
+  "id": 31579,
+  "slug": "kjaln",
+  "name": "Kjalarnes",
+  "lat": 64.2106,
+  "lon": -21.7667,
+  "elev": 10.0
+ },
+ {
+  "id": 1479,
+  "slug": "korpa",
+  "name": "Korpa",
+  "lat": 64.1505,
+  "lon": -21.7511,
+  "elev": 35.0
+ },
+ {
+  "id": 1472,
+  "slug": "fosvd",
+  "name": "Kópavogur Fossvogsdalur",
+  "lat": 64.1163,
+  "lon": -21.8617,
+  "elev": 19.0
+ },
+ {
+  "id": 1579,
+  "slug": "blnes",
+  "name": "Mosfellsbær Blikastaðanes",
+  "lat": 64.1669,
+  "lon": -21.7437,
+  "elev": 13.0
+ },
+ {
+  "id": 1,
+  "slug": "rvk",
+  "name": "Reykjavík",
+  "lat": 64.1289,
+  "lon": -21.9082,
+  "elev": 60.2
+ },
+ {
+  "id": 1478,
+  "slug": "genef",
+  "name": "Reykjavík Geirsnef",
+  "lat": 64.1281,
+  "lon": -21.8409,
+  "elev": 4.0
+ },
+ {
+  "id": 1469,
+  "slug": "hljom",
+  "name": "Reykjavík Hljómskálagarður",
+  "lat": 64.1411,
+  "lon": -21.9436,
+  "elev": 4.5
+ },
+ {
+  "id": 1470,
+  "slug": "reith",
+  "name": "Reykjavík Háahlíð",
+  "lat": 64.1288,
+  "lon": -21.9082,
+  "elev": 60.2
+ },
+ {
+  "id": 1482,
+  "slug": "vidal",
+  "name": "Reykjavík Víðidalur",
+  "lat": 64.1035,
+  "lon": -21.7971,
+  "elev": 73.1
+ },
+ {
+  "id": 1477,
+  "slug": "rflug",
+  "name": "Reykjavíkurflugvöllur",
+  "lat": 64.1284,
+  "lon": -21.9407,
+  "elev": 12.0
+ },
+ {
+  "id": 31488,
+  "slug": "sansk",
+  "name": "Sandskeið",
+  "lat": 64.0624,
+  "lon": -21.5577,
+  "elev": 180.0
+ },
+ {
+  "id": 1471,
+  "slug": "selsu",
+  "name": "Seltjarnarnes Suðurnes",
+  "lat": 64.1545,
+  "lon": -22.0325,
+  "elev": 4.5
+ },
+ {
+  "id": 1578,
+  "slug": "skrau",
+  "name": "Skrauthólar",
+  "lat": 64.2318,
+  "lon": -21.8046,
+  "elev": 20.0
+ },
+ {
+  "id": 1473,
+  "slug": "strau",
+  "name": "Straumsvík",
+  "lat": 64.0438,
+  "lon": -22.0404,
+  "elev": 7.0
+ }
+]

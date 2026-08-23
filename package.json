@@ -1,0 +1,13 @@
+{
+  "name": "wind-reykjavik",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Real-time wind flow over hofudborgarsvaedid, with live Vedurstofan observations checked against the model",
+  "scripts": {
+    "start": "node server.mjs",
+    "geo": "node scripts/build-geo.mjs"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}

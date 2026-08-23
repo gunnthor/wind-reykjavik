@@ -1,0 +1,14 @@
+node_modules/
+npm-debug.log*
+*.log
+
+# Accumulated at runtime — regenerates itself as the server runs.
+data/verification.ndjson
+
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Last good grid, kept so a rate-limited upstream cannot blank the map.
+data/grid-cache.json
