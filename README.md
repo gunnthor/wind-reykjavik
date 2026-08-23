@@ -83,7 +83,8 @@ directly; it is proxied here only to cache and to batch.
   interpolation.
 - One request per 300 points (the API is GET-only and rejects URIs past ~8 KB), so
   the grid is fetched in three parallel chunks and stitched. ~1.3 MB of JSON,
-  330 KB gzipped, in about a second. Refreshed every 10 minutes.
+  330 KB gzipped, in about a second. Refreshed every 3 hours, 8 overnight — see
+  [Staying inside the API budget](#staying-inside-the-api-budget).
 
 ### Observations — Veðurstofa Íslands
 
@@ -114,8 +115,10 @@ Two caveats worth knowing:
 
 ## How accurate is it?
 
-The **Accuracy** tab compares each live station against the same model sampled at
-that station's exact coordinates, and reports bias, MAE and RMSE across all of them.
+The **Accuracy** tab compares each live station against the model interpolated to
+that station's exact coordinates — read out of the same grid the map is drawing,
+so the panel verifies precisely what is on screen — and reports bias, MAE and RMSE
+across all of them.
 The server appends one row per hourly observation round to
 `data/verification.ndjson`, and the "Bias over time" chart draws from it.
 
@@ -162,13 +165,72 @@ public/style.css           dark-surface design tokens
 
 | Route | What |
 |---|---|
-| `/api/grid` | the full wind/weather grid, gzipped, 10 min cache |
+| `/api/grid` | the full wind/weather grid, gzipped, 3 h cache (8 h overnight) |
 | `/api/obs` | live station observations as JSON, 1 min cache |
 | `/api/verify` | per-station model-vs-observed comparison + summary stats |
 | `/api/verify/history` | the accumulated hourly bias log |
 | `/api/stations` | station metadata |
 | `/api/locale` | detected language, and which signal decided it |
-| `/api/health` | cache state and grid geometry |
+| `/api/health` | cache state, grid age, quiet-hour status, API budget |
+
+---
+
+## Staying inside the API budget
+
+Open-Meteo's free tier allows about **10,000 calls/day** and bills roughly one
+call per location. One grid fetch asks for 714, so refresh policy is the whole
+ballgame. Three things keep it in hand:
+
+**Refreshes are demand-driven.** `cached()` only refetches when a request arrives
+after the TTL has lapsed. A night with no visitors costs nothing at all — there
+is no background timer.
+
+**The TTL widens overnight**, 3 h → 8 h between 22:00 and 06:00 UTC (Iceland runs
+on UTC year-round, so those are local hours). This does nothing for a genuinely
+idle night; it matters for the night that has an uptime monitor pinging every
+five minutes, which demand-driven caching alone would refresh straight through.
+The TTL is compared against cache age at *read* time, so the wide night window
+cannot leak into the morning — at 08:00 the daytime TTL applies again and a grid
+fetched at 01:00 is already stale.
+
+**A daily budget, tracked across restarts** (`data/api-usage.json`), stops a
+traffic spike or a restart loop from spending the allowance. Once it is gone the
+server serves the disk grid flagged `stale` rather than failing.
+
+Worst case — meaning traffic in literally every hour, the only way a
+demand-driven cache reaches its ceiling:
+
+| policy | refreshes/day | calls/day |
+|---|---|---|
+| flat 3 h, no quiet window | 8 | 5,712 |
+| 3 h active / 8 h quiet, 01:00–06:00 | 8 | 5,712 |
+| **3 h active / 8 h quiet, 22:00–06:00** *(default)* | **7** | **4,998** |
+| 4 h active / 8 h quiet, 22:00–06:00 | 5 | 3,570 |
+| 2 h active / 8 h quiet, 22:00–06:00 | 9 | 6,426 |
+
+Note the second row: a 01:00–06:00 quiet window is intuitive but buys nothing,
+because 19 active hours still round up to the same seven daytime refreshes. Eight
+quiet hours remove a whole refresh from the day.
+
+**A longer TTL costs less freshness than it looks like it does.** The grid carries
+72 hours of valid times, so a grid fetched four hours ago still renders the
+current hour correctly — the only difference is that it comes from an older model
+run. And DMI Harmonie DINI only runs four times a day (00/06/12/18 UTC, published
+a few hours later), so anything under ~4 h is already finer-grained than the data
+changes. If you want more headroom, raising `GRID_TTL_MS` is close to free.
+
+Knobs, all environment variables:
+
+| var | default | what |
+|---|---|---|
+| `GRID_TTL_MS` | `10800000` (3 h) | active-hours refresh interval |
+| `GRID_TTL_QUIET_MS` | `28800000` (8 h) | quiet-hours refresh interval |
+| `QUIET_FROM` / `QUIET_TO` | `22` / `6` | quiet window, UTC hours; wraps midnight |
+| `OPEN_METEO_DAILY_BUDGET` | `9000` | soft cap below the 10,000 hard limit |
+
+`GET /api/health` reports the live picture: whether it is currently a quiet hour,
+the TTL in force, budget used and remaining, grid age, and whether the grid being
+served is stale and why.
 
 ---
 
@@ -182,6 +244,10 @@ than the address itself.
 The HTML is served `no-store` with `Vary: Cookie, Accept-Language`, because the
 same URL returns different languages. Don't put a naive shared cache in front of
 `/` without honouring that.
+
+`data/grid-cache.json` and `data/api-usage.json` are written at runtime and are
+gitignored. Keep them on a persistent volume if you can — the budget counter and
+the stale-grid fallback both survive restarts through those files.
 
 ---
 

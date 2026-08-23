@@ -12,3 +12,6 @@ Thumbs.db
 
 # Last good grid, kept so a rate-limited upstream cannot blank the map.
 data/grid-cache.json
+
+# Rolling daily API-call tally.
+data/api-usage.json

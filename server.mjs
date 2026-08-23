@@ -14,13 +14,68 @@ import { STRINGS, LANGS, DEFAULT_LANG } from './public/i18n.js';
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.env.PORT) || 5173;
 
+// --- Refresh policy ---------------------------------------------------------
 // Open-Meteo's free tier bills roughly one call per location, and one grid fetch
-// asks for 714 of them. DMI Harmonie DINI only runs four times a day, so
-// refetching more often than the model updates buys nothing and costs a lot:
-// at three hours this is ~5,700 calls/day against a 10,000/day allowance.
-// The client interpolates within the 72-hour window it already holds.
-const GRID_TTL = Number(process.env.GRID_TTL_MS) || 3 * 60 * 60 * 1000;
+// asks for 714 of them, against a 10,000/day allowance. Three things keep us
+// inside it:
+//
+//   1. Refreshes are demand-driven. cached() only refetches when a request
+//      arrives after the TTL has lapsed, so an idle night costs nothing at all.
+//   2. The TTL widens during the quiet hours. That does not matter for a night
+//      with no visitors — it matters for the one that has an uptime monitor
+//      pinging every five minutes, which demand-driven caching alone would
+//      happily refresh straight through.
+//   3. A hard daily budget, tracked across restarts, stops a traffic spike or a
+//      restart loop from spending the allowance before the day is out.
+//
+// The TTL is compared against the cache age at *read* time, so a long night
+// window cannot leak into the morning: at 08:00 the daytime TTL applies again
+// and a grid fetched at 01:00 is already stale.
+//
+// Iceland runs on UTC year-round, so UTC hours are local hours.
+// 22:00-05:59. A narrower 01:00-06:00 window reads more natural but does not
+// actually lower the ceiling: 19 active hours still round up to the same seven
+// daytime refreshes. Eight quiet hours remove one whole refresh from the day.
+const QUIET_FROM = Number(process.env.QUIET_FROM ?? 22);   // inclusive
+const QUIET_TO   = Number(process.env.QUIET_TO   ?? 6);    // exclusive
+const TTL_ACTIVE = Number(process.env.GRID_TTL_MS)       || 3 * 60 * 60 * 1000;
+const TTL_QUIET  = Number(process.env.GRID_TTL_QUIET_MS) || 8 * 60 * 60 * 1000;
+
+const isQuietHour = (d = new Date()) => {
+  const h = d.getUTCHours();
+  return QUIET_FROM <= QUIET_TO
+    ? h >= QUIET_FROM && h < QUIET_TO
+    : h >= QUIET_FROM || h < QUIET_TO;      // window wrapping midnight
+};
+const gridTtl = () => (isQuietHour() ? TTL_QUIET : TTL_ACTIVE);
+
 const GRID_CACHE_FILE = () => join(ROOT, 'data', 'grid-cache.json');
+const USAGE_FILE = () => join(ROOT, 'data', 'api-usage.json');
+
+// --- Daily API budget -------------------------------------------------------
+const DAILY_BUDGET = Number(process.env.OPEN_METEO_DAILY_BUDGET) || 9000;
+const utcDay = () => new Date().toISOString().slice(0, 10);
+let usage = null;
+
+async function loadUsage() {
+  if (usage) return usage;
+  usage = await readFile(USAGE_FILE(), 'utf8').then(JSON.parse).catch(() => null)
+       ?? { day: utcDay(), calls: 0 };
+  if (usage.day !== utcDay()) usage = { day: utcDay(), calls: 0 };
+  return usage;
+}
+
+async function spendBudget(n) {
+  const u = await loadUsage();
+  if (u.day !== utcDay()) { u.day = utcDay(); u.calls = 0; }
+  u.calls += n;
+  writeFile(USAGE_FILE(), JSON.stringify(u)).catch(() => {});
+}
+
+async function budgetRemaining() {
+  const u = await loadUsage();
+  return u.day === utcDay() ? DAILY_BUDGET - u.calls : DAILY_BUDGET;
+}
 
 // --- Grid geometry ----------------------------------------------------------
 // 0.02 lat x 0.04 lon ≈ 2.2 x 1.9 km, matching the native Harmonie mesh.
@@ -119,15 +174,32 @@ async function fetchGrid() {
   };
 }
 
+const readDiskGrid = () =>
+  readFile(GRID_CACHE_FILE(), 'utf8').then(JSON.parse).catch(() => null);
+
+const diskAge = (g) => Date.now() - Date.parse(g?.meta?.generated ?? 0);
+
 // A rate-limited or unreachable upstream should not blank the map: the last
 // good grid is kept on disk and served (flagged stale) until a fetch succeeds.
 async function fetchGridCached() {
+  const cost = GRID.nlat * GRID.nlon;
+  const disk = await readDiskGrid();
+
+  // Cold start after a restart: a disk grid still inside the current TTL is
+  // exactly what the memory cache would have held, so spend nothing.
+  if (disk && diskAge(disk) < gridTtl()) return disk;
+
+  if (disk && await budgetRemaining() < cost) {
+    console.warn('daily API budget spent — serving disk grid from ' + disk.meta.generated);
+    return { ...disk, meta: { ...disk.meta, stale: true, staleReason: 'daily budget reached' } };
+  }
+
   try {
     const grid = await fetchGrid();
+    await spendBudget(cost);
     writeFile(GRID_CACHE_FILE(), JSON.stringify(grid)).catch(() => {});
     return grid;
   } catch (err) {
-    const disk = await readFile(GRID_CACHE_FILE(), 'utf8').then(JSON.parse).catch(() => null);
     if (!disk) throw err;
     console.warn('grid fetch failed (' + err.message + ') — serving disk cache from ' + disk.meta.generated);
     return { ...disk, meta: { ...disk.meta, stale: true, staleReason: err.message } };
@@ -247,7 +319,7 @@ const angDiff = (a, b) => ((a - b + 540) % 360) - 180;
 async function buildVerification() {
   const [obs, grid, stations] = await Promise.all([
     cached('obs', 60000, fetchObs),
-    cached('grid', GRID_TTL, fetchGridCached),
+    cached('grid', gridTtl(), fetchGridCached),
     loadStations(),
   ]);
   const model = modelAtStations(grid, stations);
@@ -453,22 +525,34 @@ function sendJSON(req, res, obj, maxAge = 0) {
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname;
   try {
-    if (path === '/api/grid')     return sendJSON(req, res, await cached('grid', GRID_TTL, fetchGridCached), 300);
+    if (path === '/api/grid')     return sendJSON(req, res, await cached('grid', gridTtl(), fetchGridCached), 300);
     if (path === '/api/obs')      return sendJSON(req, res, await cached('obs', 60000, fetchObs));
     if (path === '/api/stations') return sendJSON(req, res, await loadStations(), 3600);
     if (path === '/api/verify')   return sendJSON(req, res, await cached('verify', 60000, buildVerification));
     if (path === '/api/verify/history') return sendJSON(req, res, await verificationHistory());
     if (path === '/api/health') {
       const g = cache.get('grid');
+      const cost = GRID.nlat * GRID.nlon;
+      const u = await loadUsage();
+      // Worst case assumes traffic in every hour, which is the only way a
+      // demand-driven cache reaches its ceiling.
+      const quietHours = (QUIET_TO - QUIET_FROM + 24) % 24;
+      const ceiling = Math.ceil((24 - quietHours) * 3600000 / TTL_ACTIVE)
+                    + Math.ceil(quietHours * 3600000 / TTL_QUIET);
       return sendJSON(req, res, {
         ok: true,
         cached: [...cache.keys()],
         grid: GRID,
-        gridPoints: GRID.nlat * GRID.nlon,
+        gridPoints: cost,
         gridGenerated: g?.val?.meta?.generated ?? null,
         gridStale: g?.val?.meta?.stale ?? false,
-        gridTtlMinutes: Math.round(GRID_TTL / 60000),
-        estimatedApiCallsPerDay: Math.round(GRID.nlat * GRID.nlon * 86400000 / GRID_TTL),
+        gridStaleReason: g?.val?.meta?.staleReason ?? null,
+        quietHour: isQuietHour(),
+        ttlMinutesNow: Math.round(gridTtl() / 60000),
+        ttlMinutesActive: Math.round(TTL_ACTIVE / 60000),
+        ttlMinutesQuiet: Math.round(TTL_QUIET / 60000),
+        budget: { day: u.day, used: u.calls, limit: DAILY_BUDGET, remaining: await budgetRemaining() },
+        worstCaseCallsPerDay: ceiling * cost,
       });
     }
     if (path === '/api/locale') {
@@ -510,8 +594,11 @@ server.listen(PORT, () => {
   console.log('\n  Vindur yfir höfuðborgarsvæðinu');
   console.log('  http://localhost:' + PORT + '\n');
   console.log('  grid ' + GRID.nlat + ' x ' + GRID.nlon + ' = ' + (GRID.nlat * GRID.nlon) + ' points @ ~2 km');
+  console.log('  refresh ' + (TTL_ACTIVE / 3600000) + 'h active, ' + (TTL_QUIET / 3600000) + 'h quiet ('
+    + String(QUIET_FROM).padStart(2, '0') + ':00-' + String(QUIET_TO).padStart(2, '0') + ':00 UTC)'
+    + ' · budget ' + DAILY_BUDGET + '/day');
   // Warm the caches so the first page load is instant.
-  cached('grid', GRID_TTL, fetchGridCached).then(
+  cached('grid', gridTtl(), fetchGridCached).then(
     g => console.log('  grid ready: ' + g.times.length + ' hours, ' + g.times[0] + ' -> ' + g.times.at(-1)),
     e => console.error('  grid warmup failed:', e.message));
   buildVerification().then(
