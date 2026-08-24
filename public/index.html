@@ -22,6 +22,9 @@
           data-i18n-title="lang.switchTitle" title="{{lang.switchTitle}}">{{lang.switch}}</button>
 </header>
 
+<!-- ── Field chips: the map's own layer switcher ───────────── -->
+<div id="basebar" role="radiogroup" data-i18n-aria="base.aria" aria-label="{{base.aria}}"></div>
+
 <!-- ── Side panel ─────────────────────────────────────────── -->
 <aside id="panel" aria-label="{{app.panelLabel}}">
   <!-- Mobile only: drag or tap to collapse the sheet and free up the map. -->
@@ -124,6 +127,7 @@
     <span class="unit">m/s</span></div>
   <div class="ramp" id="ramp"></div>
   <div class="ramp-ticks" id="rampTicks"></div>
+  <div id="legendExtra"></div>
   <div class="legend-warn" id="legendWarn"></div>
 </div>
 

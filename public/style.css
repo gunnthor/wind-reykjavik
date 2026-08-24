@@ -69,6 +69,23 @@ html, body {
 #titlecard h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
 #titlecard .sub { margin: 3px 0 0; font-size: 11.5px; color: var(--muted); }
 
+/* ── Field chips ────────────────────────────────────────── */
+#basebar {
+  position: absolute; z-index: 620; top: 16px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 4px; padding: 4px;
+  background: rgba(13, 13, 13, 0.82); border: 1px solid var(--border);
+  border-radius: 10px; backdrop-filter: blur(12px);
+  max-width: calc(100vw - 32px); overflow-x: auto; scrollbar-width: none;
+}
+#basebar::-webkit-scrollbar { display: none; }
+.chip {
+  flex: none; padding: 7px 13px; font: inherit; font-size: 12px; font-weight: 550;
+  color: var(--ink2); background: none; border: 0; border-radius: 7px;
+  cursor: pointer; white-space: nowrap;
+}
+.chip:hover { background: rgba(255, 255, 255, 0.06); color: var(--ink); }
+.chip.is-on { background: var(--w1); color: #fff; }
+
 /* ── Panel ──────────────────────────────────────────────── */
 #panel {
   position: absolute; z-index: 630; top: 16px; right: 16px; bottom: 74px;
@@ -133,6 +150,11 @@ html, body {
 
 /* ── Layer toggles ──────────────────────────────────────── */
 .layers { display: flex; flex-direction: column; gap: 5px; }
+.lay-group { display: flex; flex-direction: column; gap: 5px; }
+.lay-group + .lay-group {
+  margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--hair);
+}
+.lay input[type="radio"] { accent-color: var(--w2); width: 15px; height: 15px; flex: none; cursor: pointer; }
 .lay {
   display: flex; align-items: center; gap: 10px; padding: 9px 11px;
   background: var(--surface); border: 1px solid var(--border); border-radius: 9px; cursor: pointer;
@@ -194,7 +216,9 @@ table.cmp tr:hover td { background: rgba(255, 255, 255, 0.04); }
 .ramp { height: 9px; border-radius: 3px; }
 .ramp-ticks { position: relative; height: 14px; margin-top: 3px; font-size: 9.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .ramp-ticks span { position: absolute; transform: translateX(-50%); }
-.legend-warn { display: flex; gap: 12px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hair); font-size: 10px; color: var(--muted); }
+.legend-row { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--hair); }
+.legend-row .legend-title { margin-bottom: 6px; }
+.legend-warn { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--hair); font-size: 10px; color: var(--muted); }
 .legend-warn i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 4px; vertical-align: baseline; }
 
 /* ── Time bar ───────────────────────────────────────────── */
@@ -285,6 +309,13 @@ table.cmp tr:hover td { background: rgba(255, 255, 255, 0.04); }
   .langbtn { height: 30px; min-width: 40px; }
   .leaflet-top.leaflet-left { margin-top: 66px; }
   .leaflet-control-zoom { display: none; }      /* pinch works; the buttons crowd */
+
+  #basebar {
+    top: 62px; left: 10px; right: 10px; transform: none;
+    max-width: none; justify-content: flex-start;
+  }
+  .chip { padding: 9px 14px; font-size: 12.5px; }
+  .leaflet-top.leaflet-left { margin-top: 112px; }
 
   #panel {
     left: 0; right: 0; bottom: 0; top: auto; width: auto;
@@ -404,6 +435,9 @@ table.cmp tr:hover td { background: rgba(255, 255, 255, 0.04); }
   .pane { padding-left: calc(var(--grab) + 8px); padding-bottom: 14px; }
   .tab { padding: 10px 6px; }
   #titlecard { left: 8px; right: calc(var(--drawer-w) + 16px); top: 8px; }
+  #basebar { top: 56px; left: 8px; right: calc(var(--drawer-w) + 16px); }
+  .chip { padding: 6px 11px; font-size: 11.5px; }
+  .leaflet-top.leaflet-left { margin-top: 100px; }
 
   #timebar {
     left: 8px; bottom: 8px;

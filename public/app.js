@@ -11,6 +11,9 @@ import { STRINGS, LANGS, DEFAULT_LANG, translate } from './i18n.js';
 const $  = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 
+const BASE_FIELDS = ['speed', 'temp', 'precip', 'cloud', 'none'];
+const OVERLAYS = ['particles', 'gusts', 'stations'];
+
 const MOBILE_Q = window.matchMedia('(max-width: 900px)');
 const isMobile = () => MOBILE_Q.matches;
 // Landscape phones get a side drawer rather than a bottom sheet, so the drag
@@ -27,6 +30,16 @@ const STATUS = { warning: '#fab219', serious: '#ec835a', critical: '#d03b3b', go
 // Gust thresholds roughly matching Veðurstofan's wind-warning tiers.
 const GUST_TIERS = [[20, STATUS.warning], [28, STATUS.serious], [35, STATUS.critical]];
 const RAIN = '#1baf7a', SNOW = '#9085e9';
+
+// Temperature is diverging, and in Iceland the meaningful midpoint is not the
+// mean — it is freezing. So 0 °C is the neutral point: the wash fades out there
+// and the two poles take opposite hues, with the 0° isotherm drawn on top.
+const TEMP_COLD = '#3987e5', TEMP_WARM = '#e66767';
+const TEMP_SPAN = 18;                       // |°C| at which the tint saturates
+const TEMP_STEP = 2;                        // isotherm interval, °C
+const FREEZE_LINE = [238, 242, 247];
+const ISOTHERM = [214, 224, 238];
+const CLOUD_RGB = [226, 232, 240];
 
 const hex2rgb = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
 const RAMP_RGB = RAMP.map(([v, h]) => [v, hex2rgb(h)]);
@@ -56,7 +69,11 @@ const bfName = (b) => dict().beaufort[b];
 const state = {
   grid: null, obs: null, verify: null, history: [],
   tIndex: 0, nowIndex: 0, slice: null,
-  layers: { particles: true, speed: true, gusts: false, cloud: false, precip: false, stations: true },
+  // Stacking speed + cloud + rain produced mud, and hid whichever you actually
+  // wanted. The background field is now one choice; gusts stay independent
+  // because a warning has to be able to sit on top of anything.
+  base: 'speed',
+  layers: { particles: true, gusts: false, stations: true },
   density: 5000, rate: 12, trail: 9, playing: false,
   lang: DEFAULT_LANG,
 };
@@ -98,6 +115,7 @@ function setLang(lang) {
   document.documentElement.lang = lang;
 
   applyStaticI18n();
+  buildBaseBar();
   buildLayerToggles();
   syncSliders();
   renderLegend();
@@ -210,13 +228,15 @@ class RasterLayer extends CanvasLayer {
     this.offCtx = this.off.getContext('2d');
   }
   draw() {
-    const L_ = state.layers;
-    const any = L_.speed || L_.gusts || L_.cloud || L_.precip;
+    const base = state.base;
     this.clear();
-    if (!any || !state.slice) return;
+    if ((base === 'none' && !state.layers.gusts) || !state.slice) return;
 
-    const cols = Math.ceil(this.w / RC) + 1, rows = Math.ceil(this.h / RC) + 1;
-    const { lats, lons } = axisLatLon(cols, rows, RC);
+    // Contours need a finer sample step than a smooth wash does: at RC the
+    // upscale smears a crossing into a ribbon roughly 2 * RC wide.
+    const rc = base === 'temp' ? 3 : RC;
+    const cols = Math.ceil(this.w / rc) + 1, rows = Math.ceil(this.h / rc) + 1;
+    const { lats, lons } = axisLatLon(cols, rows, rc);
     this.off.width = cols; this.off.height = rows;
     const img = this.offCtx.createImageData(cols, rows);
     const px = img.data;
@@ -224,20 +244,66 @@ class RasterLayer extends CanvasLayer {
 
     for (let r = 0; r < rows; r++) {
       const lat = lats[r];
+      const latBelow = lats[Math.min(r + 1, rows - 1)];
       for (let c = 0; c < cols; c++) {
         const lon = lons[c], o = (r * cols + c) * 4;
         let cr = 0, cg = 0, cb = 0, ca = 0;
 
-        // Painter's order: speed underneath, then gust flags, cloud, precip.
-        if (L_.speed) {
+        if (base === 'speed') {
           const v = sampleAt(S.speed, lat, lon);
           if (v === v) {
             const col = windRGB(v);
             const a = Math.min(0.60, 0.08 + Math.pow(Math.min(v, 24) / 24, 0.72) * 0.52);
             cr = col[0]; cg = col[1]; cb = col[2]; ca = a;
           }
+        } else if (base === 'temp') {
+          const tv = sampleAt(S.temp, lat, lon);
+          if (tv === tv) {
+            // Hue pivots at freezing, which is the threshold that actually
+            // matters here; the tint stays faint because a full-strength wash
+            // over the whole domain floods the map on any day that sits wholly
+            // on one side of zero — which, in summer, is every day.
+            const col = hex2rgb(tv < 0 ? TEMP_COLD : TEMP_WARM);
+            cr = col[0]; cg = col[1]; cb = col[2];
+            ca = Math.pow(Math.min(Math.abs(tv), TEMP_SPAN) / TEMP_SPAN, 0.9) * 0.22;
+
+            // The structure is carried by isotherms: a contour lands wherever a
+            // neighbouring sample falls in a different 2° band. Crisper than a
+            // neutral band, whose width would vary with the local gradient.
+            const tr = sampleAt(S.temp, lat, lons[Math.min(c + 1, cols - 1)]);
+            const tb = sampleAt(S.temp, latBelow, lon);
+            const band = Math.floor(tv / TEMP_STEP);
+            let line = 0;
+            for (let k = 0; k < 2; k++) {
+              const nv = k ? tb : tr;
+              if (nv !== nv || Math.floor(nv / TEMP_STEP) === band) continue;
+              line = Math.max(line, (nv < 0) !== (tv < 0) ? 2 : 1);
+            }
+            if (line === 2) {
+              cr = FREEZE_LINE[0]; cg = FREEZE_LINE[1]; cb = FREEZE_LINE[2]; ca = 0.9;
+            } else if (line === 1) {
+              cr = ISOTHERM[0]; cg = ISOTHERM[1]; cb = ISOTHERM[2]; ca = 0.42;
+            }
+          }
+        } else if (base === 'precip') {
+          const pv = sampleAt(S.precip, lat, lon), sv = sampleAt(S.snow, lat, lon);
+          if (pv === pv && pv > 0.02) {
+            const col = hex2rgb(sv === sv && sv > 0.02 ? SNOW : RAIN);
+            // No opacity floor: drizzle at 0.1 mm/h must not read like a downpour.
+            const a = Math.pow(Math.min(pv, 1), 0.5) * 0.52;
+            cr = col[0]; cg = col[1]; cb = col[2]; ca = a;
+          }
+        } else if (base === 'cloud') {
+          const cv = sampleAt(S.cloud, lat, lon);
+          if (cv === cv && cv > 8) {
+            // Iceland is overcast most of the time, so this stays a thin veil —
+            // strong enough to read, light enough to keep the map underneath.
+            const a = Math.min(0.30, Math.pow(cv / 100, 1.6) * 0.30);
+            cr = CLOUD_RGB[0]; cg = CLOUD_RGB[1]; cb = CLOUD_RGB[2]; ca = a;
+          }
         }
-        if (L_.gusts) {
+
+        if (state.layers.gusts) {
           const gv = sampleAt(S.gust, lat, lon);
           if (gv === gv) {
             let tier = null;
@@ -249,27 +315,6 @@ class RasterLayer extends CanvasLayer {
             }
           }
         }
-        if (L_.cloud) {
-          const cv = sampleAt(S.cloud, lat, lon);
-          if (cv === cv && cv > 8) {
-            // Iceland is overcast most of the time, so this stays a thin veil —
-            // strong enough to read, light enough to keep the map underneath.
-            const a = Math.min(0.26, Math.pow(cv / 100, 1.6) * 0.26);
-            cr = cr * (1 - a) + 226 * a; cg = cg * (1 - a) + 232 * a;
-            cb = cb * (1 - a) + 240 * a; ca = Math.max(ca, a);
-          }
-        }
-        if (L_.precip) {
-          const pv = sampleAt(S.precip, lat, lon), sv = sampleAt(S.snow, lat, lon);
-          const snowy = sv === sv && sv > 0.02;
-          if (pv === pv && pv > 0.02) {
-            const t = hex2rgb(snowy ? SNOW : RAIN);
-            // No opacity floor: drizzle at 0.1 mm/h must not read like a downpour.
-            const a = Math.pow(Math.min(pv, 1), 0.5) * 0.40;   // stays a tint, not a wash
-            cr = cr * (1 - a) + t[0] * a; cg = cg * (1 - a) + t[1] * a;
-            cb = cb * (1 - a) + t[2] * a; ca = Math.max(ca, a);
-          }
-        }
 
         px[o] = cr; px[o + 1] = cg; px[o + 2] = cb; px[o + 3] = ca * 255;
       }
@@ -279,7 +324,7 @@ class RasterLayer extends CanvasLayer {
     const ctx = this.ctx;
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(this.off, 0, 0, cols, rows, -RC / 2, -RC / 2, cols * RC, rows * RC);
+    ctx.drawImage(this.off, 0, 0, cols, rows, -rc / 2, -rc / 2, cols * rc, rows * rc);
   }
 }
 
@@ -829,6 +874,28 @@ function initSheet() {
   renderSheetPeek();
 }
 
+// ── Field chips ────────────────────────────────────────────────────────────
+function buildBaseBar() {
+  $('#basebar').innerHTML = BASE_FIELDS.map(k =>
+    `<button class="chip${state.base === k ? ' is-on' : ''}" data-base="${k}"
+       role="radio" aria-checked="${state.base === k}"
+       title="${t('base.' + k + '.d')}">${t('base.' + k)}</button>`).join('');
+}
+
+function setBase(next, persist = true) {
+  if (!BASE_FIELDS.includes(next)) return;
+  state.base = next;
+  if (persist) { try { localStorage.setItem('base', next); } catch { /* private mode */ } }
+  for (const el of $$('#basebar .chip')) {
+    const on = el.dataset.base === next;
+    el.classList.toggle('is-on', on);
+    el.setAttribute('aria-checked', String(on));
+  }
+  for (const el of $$('#layerToggles input[data-base]')) el.checked = el.dataset.base === next;
+  raster?.draw();
+  renderLegend();
+}
+
 // ── Legend ─────────────────────────────────────────────────────────────────
 function renderLegend() {
   const stops = RAMP.map(([v, c]) => `${c} ${(v / 32 * 100).toFixed(1)}%`).join(', ');
@@ -836,13 +903,40 @@ function renderLegend() {
   $('#rampTicks').innerHTML = [0, 8, 16, 24, 32]
     .map(v => `<span style="left:${(v / 32 * 100).toFixed(1)}%">${v}</span>`).join('');
 
+  // Every encoded channel on screen gets its own scale — the wind ramp always,
+  // since the particles are never off, plus one for the chosen background field.
+  const scale = (title, unit, gradient, ticks, span) => `
+    <div class="legend-row">
+      <div class="legend-title"><span>${title}</span> <span class="unit">${unit}</span></div>
+      <div class="ramp" style="background:linear-gradient(90deg,${gradient})"></div>
+      <div class="ramp-ticks">${ticks.map(v =>
+        `<span style="left:${((v - span[0]) / (span[1] - span[0]) * 100).toFixed(1)}%">${v}</span>`
+      ).join('')}</div>
+    </div>`;
+
+  let extra = '';
+  if (state.base === 'temp') {
+    extra = scale(t('legend.temp'), '°C',
+      `${TEMP_COLD} 0%, rgba(120,120,120,0.25) 50%, ${TEMP_WARM} 100%`,
+      [-18, -9, 0, 9, 18], [-18, 18]);
+  } else if (state.base === 'precip') {
+    extra = scale(t('legend.precipTitle'), 'mm/h',
+      `rgba(27,175,122,0.12) 0%, ${RAIN} 100%`, [0, 0.5, 1], [0, 1]);
+  } else if (state.base === 'cloud') {
+    extra = scale(t('legend.cloudTitle'), '%',
+      `rgba(226,232,240,0.06) 0%, rgba(226,232,240,0.85) 100%`, [0, 50, 100], [0, 100]);
+  }
+  $('#legendExtra').innerHTML = extra;
+
   const parts = [];
   if (state.layers.gusts) parts.push(...GUST_TIERS.map(([thr, c]) =>
     `<div><i style="background:${c}"></i>${t('legend.gustTier', { v: thr })}</div>`));
-  if (state.layers.precip) parts.push(
+  if (state.base === 'temp') parts.push(
+    `<div><i style="background:#eef2f7"></i>${t('legend.freezing')}</div>`,
+    `<div><i style="background:#d6e0ee"></i>${t('legend.isotherm')}</div>`);
+  if (state.base === 'precip') parts.push(
     `<div><i style="background:${RAIN}"></i>${t('legend.rain')}</div>`,
     `<div><i style="background:${SNOW}"></i>${t('legend.snow')}</div>`);
-  if (state.layers.cloud) parts.push(`<div><i style="background:#e2e8f0"></i>${t('legend.cloud')}</div>`);
   $('#legendWarn').innerHTML = parts.join('') || `<div>${t('legend.hint')}</div>`;
 }
 
@@ -934,23 +1028,39 @@ async function loadObs() {
 
 // ── Layer definitions ──────────────────────────────────────────────────────
 // Names and descriptions come from the string table; only the swatch lives here.
-const LAYER_DEFS = [
-  ['particles', 'linear-gradient(90deg,#1c5cab,#cde2fb)'],
-  ['speed',     'linear-gradient(90deg,#1c5cab,#86b6ef)'],
-  ['gusts',     `linear-gradient(90deg,${STATUS.warning},${STATUS.critical})`],
-  ['cloud',     'linear-gradient(90deg,#3a3a38,#e2e8f0)'],
-  ['precip',    `linear-gradient(90deg,${RAIN},${SNOW})`],
-  ['stations',  'linear-gradient(90deg,#86b6ef,#86b6ef)'],
-];
+const BASE_SWATCH = {
+  speed:  'linear-gradient(90deg,#1c5cab,#86b6ef)',
+  temp:   `linear-gradient(90deg,${TEMP_COLD},#6a6a66,${TEMP_WARM})`,
+  precip: `linear-gradient(90deg,${RAIN},${SNOW})`,
+  cloud:  'linear-gradient(90deg,#3a3a38,#e2e8f0)',
+  none:   'linear-gradient(90deg,#2c2c2a,#2c2c2a)',
+};
+const OVERLAY_SWATCH = {
+  particles: 'linear-gradient(90deg,#1c5cab,#cde2fb)',
+  gusts:     `linear-gradient(90deg,${STATUS.warning},${STATUS.critical})`,
+  stations:  'linear-gradient(90deg,#86b6ef,#86b6ef)',
+};
 
 function buildLayerToggles() {
-  $('#layerToggles').innerHTML = LAYER_DEFS.map(([k, sw]) =>
+  const field = BASE_FIELDS.map(k =>
+    `<label class="lay"><input type="radio" name="basefield" data-base="${k}" ${state.base === k ? 'checked' : ''}>
+      <span class="lay-sw" style="background:${BASE_SWATCH[k]}"></span>
+      <span><span class="lay-t">${t('base.' + k)}</span><br>
+        <span class="lay-d">${t('base.' + k + '.d')}</span></span></label>`).join('');
+
+  const over = OVERLAYS.map(k =>
     `<label class="lay"><input type="checkbox" data-layer="${k}" ${state.layers[k] ? 'checked' : ''}>
-      <span class="lay-sw" style="background:${sw}"></span>
+      <span class="lay-sw" style="background:${OVERLAY_SWATCH[k]}"></span>
       <span><span class="lay-t">${t('layer.' + k)}</span><br>
         <span class="lay-d">${t('layer.' + k + '.d')}</span></span></label>`).join('');
 
-  $$('#layerToggles input').forEach(el => el.addEventListener('change', () => {
+  $('#layerToggles').innerHTML =
+    `<div class="lay-group">${field}</div><div class="lay-group">${over}</div>`;
+
+  $$('#layerToggles input[data-base]').forEach(el =>
+    el.addEventListener('change', () => { if (el.checked) setBase(el.dataset.base); }));
+
+  $$('#layerToggles input[data-layer]').forEach(el => el.addEventListener('change', () => {
     state.layers[el.dataset.layer] = el.checked;
     if (el.dataset.layer === 'stations') renderStations();
     else if (el.dataset.layer === 'particles') particles.clear();
@@ -1051,9 +1161,15 @@ function applyURLParams() {
   const layers = q.get('layers');
   if (layers != null) {
     const want = new Set(layers.split(',').map(x => x.trim()).filter(Boolean));
-    for (const k of Object.keys(state.layers)) state.layers[k] = want.has(k);
+    for (const k of OVERLAYS) state.layers[k] = want.has(k);
+    // Links written before the fields became exclusive may still name a scalar
+    // in ?layers=; honour the first one rather than silently dropping it.
+    const scalar = BASE_FIELDS.find(b => want.has(b));
+    setBase(scalar ?? 'none', false);
     buildLayerToggles();
   }
+  const base = q.get('base');
+  if (base) setBase(base, false);          // keeps chips and radios in step
 
   const sheet = q.get('sheet');
   if (sheet) setSheet(sheet, false);      // deep link, don't overwrite the saved choice
@@ -1084,9 +1200,19 @@ function applyURLParams() {
     applyStaticI18n();
     syncSliders();
   }
+  try {
+    const savedBase = localStorage.getItem('base');
+    if (BASE_FIELDS.includes(savedBase)) state.base = savedBase;
+  } catch { /* private mode */ }
+  buildBaseBar();
   renderLegend();
   buildLayerToggles();
   initSheet();
+
+  $('#basebar').addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-base]');
+    if (chip) setBase(chip.dataset.base);
+  });
   try {
     await loadGrid();
   } catch (err) {

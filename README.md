@@ -14,22 +14,44 @@ No dependencies, no API keys, no build step. Node 18+ (uses global `fetch`).
 
 ## What's on screen
 
-| Layer | Source | Notes |
+The chips above the map choose **one background field**. Stacking wind speed,
+cloud and rain on top of each other produced mud and hid whichever one you
+actually wanted, so they are now exclusive:
+
+| Field | Source | Notes |
+|---|---|---|
+| **Wind** | model | continuous 10 m wind speed, blue sequential ramp |
+| **Temp** | model | 2 m temperature — faint tint, hue pivoting at freezing, with isotherms every 2 °C and the 0 °C line picked out |
+| **Rain** | model | precipitation rate, rain (aqua) vs snow (violet) |
+| **Cloud** | model | total cloud fraction, kept to a thin veil |
+| **None** | — | particles over a bare basemap |
+
+On top of that, three independent overlays:
+
+| Overlay | Source | Notes |
 |---|---|---|
 | **Wind flow** | model | particles advected through the interpolated field |
-| **Speed field** | model | continuous 10 m wind speed, blue sequential ramp |
-| **Gust warnings** | model | zones above 20 / 28 / 35 m/s gusts |
-| **Cloud cover** | model | total cloud fraction |
-| **Precipitation** | model | rain (aqua) vs snow (violet), by rate |
+| **Gust warnings** | model | zones above 20 / 28 / 35 m/s — a warning has to be able to sit on anything |
 | **Stations** | **observed** | 19 Veðurstofan sites, arrows pointing downwind |
+
+**On temperature.** A fixed diverging scale flooded the map: for most of the
+year every cell sits on one side of zero, so the whole domain washed to a single
+hue and told you nothing. The tint is therefore kept faint and the structure is
+carried by **isotherms** — a contour lands wherever a neighbouring sample falls
+in a different 2 °C band, which is crisper than a neutral band whose width would
+vary with the local gradient. Freezing gets its own brighter line, because in
+Iceland that is the threshold that actually matters. The contour pass samples at
+3 px rather than 6, since the upscale would otherwise smear each crossing into a
+ribbon.
 
 The scrubber runs from 24 h in the past to 48 h ahead. Because observations only
 exist for the present, scrubbing off "now" switches the station points to the
 *model* sampled at those same coordinates, labelled as such — the map never mixes
 a stale reading into a forecast.
 
-Deep links: `?tab=accuracy`, `?layers=particles,cloud,precip`, `?t=27`,
-`?c=64.13,-21.90&z=12`, `?lang=is`, `?sheet=peek`.
+Deep links: `?base=temp`, `?tab=accuracy`, `?layers=particles,gusts,stations`,
+`?t=27`, `?c=64.13,-21.90&z=12`, `?lang=is`, `?sheet=peek`. Older links that
+name a scalar in `?layers=` still work — the first one becomes the base field.
 
 ---
 
@@ -264,6 +286,83 @@ Knobs, all environment variables:
 `GET /api/health` reports the live picture: whether it is currently a quiet hour,
 the TTL in force, budget used and remaining, grid age, and whether the grid being
 served is stale and why.
+
+---
+
+## What would it take to cover all of Iceland?
+
+Short version: **the rendering scales fine, the API budget does not.**
+
+Iceland's bounding box is 3.3° × 11.2° — about 367 × 527 km, or 194,000 km²
+against the 44 × 64 km this covers today. At the current 2 km mesh that is
+**46,646 grid points, 65× what the capital region needs.** Since Open-Meteo bills
+roughly one call per location, that is 46,646 calls for a single refresh:
+
+| resolution | grid | points | calls per fetch | free (10k/day) | Standard (33k/day) | Professional (166k/day) |
+|---|---|---|---|---|---|---|
+| 2 km (today's) | 166 × 281 | 46,646 | 46,646 | 0.2 | 0.7 | 3.6 |
+| 3 km | 111 × 188 | 20,868 | 20,868 | 0.5 | 1.6 | 8.0 |
+| 4 km | 83 × 141 | 11,703 | 11,703 | 0.9 | 2.9 | 14.2 |
+| 7 km | 56 × 94 | 5,264 | 5,264 | 1.9 | 6.3 | 31.7 |
+| 9 km | 42 × 71 | 2,982 | 2,982 | 3.4 | 11.2 | 55.9 |
+
+(fetches affordable per day; you need ≥ 1 to work at all, and ≥ 4 to track every
+Harmonie run)
+
+So on the free tier, national coverage means **9 km cells** — which throws away
+exactly the terrain detail that makes this worth looking at. Esja and Bláfjöll
+stop existing. The 2 km field only becomes affordable on Professional, and even
+then at 3.6 refreshes a day.
+
+Two things are *not* blockers, which is worth knowing before anyone panics:
+
+- **The particle renderer does not care.** It works in screen space against a
+  vector field rebuilt per viewport, so its cost is set by pixels, not by grid
+  size. Zooming out to the whole country costs exactly what it costs now.
+- **The station network scales for free.** Probing the whole of `vedur.is`
+  turns up **132 live stations** reporting wind nationally against the 19 here,
+  and they all arrive in one XML request. The accuracy panel would get seven
+  times the sample — the most interesting part of the expansion, and the
+  cheapest.
+
+The real architectural change is transport. Today the entire grid is shipped to
+the browser and interpolated client-side, which is what makes it feel smooth.
+That does not survive a 65× increase:
+
+| | values | JSON | Float32 | Int16 |
+|---|---|---|---|---|
+| 2 km, 72 h, u+v | 6.72 M | ~47 MB | 26.9 MB | 13.4 MB |
+| 2 km, 24 h, u+v | 2.24 M | ~16 MB | 9.0 MB | 4.5 MB |
+| 4 km, 72 h, u+v | 1.69 M | ~12 MB | 6.7 MB | 3.4 MB |
+
+The fix is to stop conflating two separate budgets: **API cost is a server
+concern, payload is a client concern.** Have the server hold the national grid in
+memory (46,646 × 72 × 8 fields × 4 B ≈ 110 MB — nothing for a server) and serve
+each browser a downsampled window for its current viewport and zoom. API cost
+then stays at one national fetch per refresh regardless of how many people are
+watching, and the payload stays about what it is now. That plus a binary encoding
+(Int16 with a scale factor, not JSON) is a weekend of work.
+
+Which leaves the budget as the only hard problem, and it has three honest
+answers:
+
+1. **Pay for it.** Professional at 5M calls/month affords the 2 km national grid
+   about 3–4 times a day, which matches the model's own run cadence. Simplest
+   path by far.
+2. **Mask to land.** Roughly half that bounding box is open ocean. Requesting
+   only points within ~25 km of the coast cuts the grid by about 40 %, bringing
+   2 km national to ~28,000 calls — still over the free tier, but it makes
+   Standard viable.
+3. **Stop using the hosted API.** Open-Meteo is open source and can be
+   self-hosted, syncing the DMI Harmonie DINI dataset directly. Unlimited
+   queries at full resolution, and no per-location billing at all. Much the
+   biggest lift — tens of GB of model data to sync and keep current — but it is
+   the only option that makes 2 km national coverage genuinely free.
+
+My read: expanding the *map* is a small change, expanding the *data* is not. If
+this stays a capital-region tool, the current design is right. If it goes
+national, it wants the viewport-window architecture first and then either a paid
+tier or a self-hosted Open-Meteo behind it.
 
 ---
 
