@@ -26,7 +26,7 @@
 * { box-sizing: border-box; }
 
 html, body {
-  margin: 0; height: 100%; overflow: hidden;
+  margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none;
   background: var(--plane); color: var(--ink);
   font-family: var(--sans); font-size: 14px; line-height: 1.45;
   -webkit-font-smoothing: antialiased;
@@ -253,15 +253,176 @@ table.cmp tr:hover td { background: rgba(255, 255, 255, 0.04); }
 }
 #toast.on { opacity: 1; transform: translate(-50%, 0); }
 
-/* ── Responsive ─────────────────────────────────────────── */
+/* ── Sheet handle (mobile only) ─────────────────────────── */
+.sheet-handle { display: none; }
+
+/* ── Responsive: the panel becomes a draggable bottom sheet ─
+   Heights live here rather than in JS, so the snap points and their
+   transition stay in one place; JS only writes --sheet-h while a drag is in
+   flight. The map is full-bleed underneath and never resizes, so moving the
+   sheet costs no relayout of the canvases. */
 @media (max-width: 900px) {
-  :root { --panel-w: auto; }
-  #panel { left: 12px; right: 12px; top: auto; bottom: 70px; height: 45vh; }
-  .leaflet-bottom.leaflet-right { margin-right: 0; margin-bottom: 62px; }
-  #legend { display: none; }
-  #titlecard { right: 12px; }
-  #titlecard h1 { font-size: 15px; }
-  .leaflet-top.leaflet-left { margin-top: 88px; }
+  :root {
+    --panel-w: auto;
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --sheet-peek: 56px;
+    --sheet-h: 48vh;
+    --ease-sheet: cubic-bezier(.32, .72, 0, 1);
+  }
+  body[data-sheet="peek"] { --sheet-h: var(--sheet-peek); }
+  body[data-sheet="half"] { --sheet-h: 48vh; }
+  body[data-sheet="full"] { --sheet-h: 88vh; }
+
+  /* Everything that floats above the sheet stacks off this one value. */
+  body { --stack: calc(var(--sheet-h) + var(--safe-b)); }
+
+  #titlecard {
+    left: 10px; right: 10px; top: 10px; padding: 9px 10px 9px 13px;
+    border-radius: 11px;
+  }
+  #titlecard h1 { font-size: 14.5px; }
+  #titlecard .sub { display: none; }
+  .langbtn { height: 30px; min-width: 40px; }
+  .leaflet-top.leaflet-left { margin-top: 66px; }
+  .leaflet-control-zoom { display: none; }      /* pinch works; the buttons crowd */
+
+  #panel {
+    left: 0; right: 0; bottom: 0; top: auto; width: auto;
+    height: var(--stack);
+    padding-bottom: var(--safe-b);
+    border-radius: 16px 16px 0 0;
+    border-left: 0; border-right: 0; border-bottom: 0;
+    box-shadow: 0 -10px 34px rgba(0, 0, 0, 0.62);
+    transition: height .3s var(--ease-sheet);
+  }
+  body[data-dragging] #panel { transition: none; }
+
+  .sheet-handle {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; flex: none; height: var(--sheet-peek);
+    padding: 0 14px; background: none; border: 0; cursor: grab;
+    color: var(--ink2); font: inherit; text-align: left;
+    touch-action: none;                          /* we own the vertical drag */
+    -webkit-tap-highlight-color: transparent;
+  }
+  .sheet-handle:active { cursor: grabbing; }
+  .grip {
+    position: absolute; top: 7px; left: 50%; transform: translateX(-50%);
+    width: 36px; height: 4px; border-radius: 2px; background: #4a4a46;
+  }
+  .sheet-peek {
+    flex: 1; min-width: 0; font-size: 13px; color: var(--ink2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    margin-top: 6px; display: none;
+  }
+  /* Collapsed, the summary IS the panel. Expanded, the hero says it better, so
+     the handle shrinks to a grab strip and gives the rows back their space. */
+  body[data-sheet="peek"] .sheet-peek { display: block; }
+  body:not([data-sheet="peek"]) .sheet-handle { height: 34px; justify-content: flex-end; }
+  .sheet-peek b { font-size: 16px; font-weight: 650; color: var(--ink); }
+  .sheet-chev {
+    width: 20px; height: 20px; flex: none; margin-top: 6px; color: var(--muted);
+    transition: transform .3s var(--ease-sheet);
+  }
+  body[data-sheet="peek"] .sheet-chev { transform: rotate(0deg); }
+  body[data-sheet="half"] .sheet-chev { transform: rotate(180deg); }
+  body[data-sheet="full"] .sheet-chev { transform: rotate(180deg); }
+
+  /* Collapsed: the summary line in the handle is the whole panel. */
+  body[data-sheet="peek"] .tabs,
+  body[data-sheet="peek"] .pane { display: none; }
+
+  .tabs { padding: 2px 8px 0; }
+  .tab { padding: 13px 6px; font-size: 13px; }
+  .pane { padding: 14px 14px 22px; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+  .tablewrap { max-height: none; }
+  .tiles, .scorecards { gap: 9px; }
+  .st { padding: 9px 8px; }                      /* fatter tap target */
+  .lay { padding: 12px 11px; }
+  .slider input { height: 26px; }
+
+  #timebar {
+    left: 10px; right: 10px; bottom: calc(var(--stack) + 24px);
+    transition: bottom .3s var(--ease-sheet), opacity .2s, transform .2s;
+  }
+  body[data-dragging] #timebar { transition: none; }
+  body[data-sheet="full"] #timebar { opacity: 0; transform: translateY(10px); pointer-events: none; }
+  .tbtn { height: 32px; min-width: 32px; }
+  .tlabel { width: auto; min-width: 96px; font-size: 11.5px; }
+
+  /* The legend only earns its space when the map is actually visible. */
+  #legend { display: none; left: 10px; right: 10px; width: auto; bottom: calc(var(--stack) + 78px); }
+  body[data-sheet="peek"] #legend { display: block; }
+  #legend .legend-warn { display: none; }
+
+  .leaflet-bottom.leaflet-right {
+    margin-right: 0;
+    margin-bottom: calc(var(--stack) + 2px);
+    transition: margin-bottom .3s var(--ease-sheet);
+  }
+  body[data-dragging] .leaflet-bottom.leaflet-right { transition: none; }
+
+  #toast { bottom: calc(var(--stack) + 78px); }
+}
+
+/* Landscape phones are short but wide. A bottom sheet there leaves a sliver of
+   map, so the same collapse control drives a side drawer instead: it slides out
+   to the right and leaves a 30px grab strip behind. */
+@media (max-width: 900px) and (orientation: landscape) {
+  body { --drawer-w: min(340px, 46vw); --grab: 30px; }
+
+  #panel {
+    top: 8px; right: 8px; bottom: 8px; left: auto;
+    width: var(--drawer-w); height: auto;
+    padding-bottom: 0;
+    border: 1px solid var(--border); border-radius: 12px;
+    transform: none;
+    transition: transform .3s var(--ease-sheet);
+  }
+  body[data-sheet="peek"] #panel { transform: translateX(calc(100% - var(--grab))); }
+  body[data-dragging] #panel { transition: none; }
+
+  /* The handle becomes a vertical grab strip pinned to the drawer's left edge.
+     Selectors here carry a body[data-sheet] prefix so they outrank the portrait
+     rules above, which key off the sheet state and would otherwise leak in. */
+  body[data-sheet] .sheet-handle {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: var(--grab); height: auto;
+    flex-direction: column; justify-content: center; gap: 0;
+    padding: 0; border-right: 1px solid var(--hair);
+  }
+  .grip { top: 50%; left: 13px; transform: translateY(-50%); width: 4px; height: 34px; }
+  .sheet-peek { display: none !important; }
+  body[data-sheet] .sheet-chev { margin: 0; transform: rotate(-90deg); }
+  body[data-sheet="peek"] .sheet-chev { transform: rotate(90deg); }
+
+  /* Content stays mounted — the drawer slides rather than emptying. */
+  body[data-sheet="peek"] .tabs { display: flex; }
+  body[data-sheet="peek"] .pane { display: none; }
+  body[data-sheet="peek"] .pane.is-on { display: block; }
+  .tabs { padding-left: calc(var(--grab) + 8px); }
+  .pane { padding-left: calc(var(--grab) + 8px); padding-bottom: 14px; }
+  .tab { padding: 10px 6px; }
+  #titlecard { left: 8px; right: calc(var(--drawer-w) + 16px); top: 8px; }
+
+  #timebar {
+    left: 8px; bottom: 8px;
+    right: calc(var(--drawer-w) + 16px);
+    transition: right .3s var(--ease-sheet);
+  }
+  body[data-sheet="peek"] #timebar { right: calc(var(--grab) + 16px); }
+  body[data-sheet="full"] #timebar { opacity: 1; transform: none; pointer-events: auto; }
+
+  #legend { display: none !important; }          /* no vertical room to spare */
+  #toast { bottom: 62px; }
+
+  .leaflet-bottom.leaflet-right {
+    margin-bottom: 62px;
+    margin-right: calc(var(--drawer-w) + 16px);
+    transition: margin-right .3s var(--ease-sheet);
+  }
+  body[data-sheet="peek"] .leaflet-bottom.leaflet-right { margin-right: calc(var(--grab) + 16px); }
+  .leaflet-top.leaflet-left { margin-top: 60px; }
 }
 
 /* Model-sampled station markers read as a forecast, not a reading. */

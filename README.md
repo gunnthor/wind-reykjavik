@@ -29,7 +29,40 @@ exist for the present, scrubbing off "now" switches the station points to the
 a stale reading into a forecast.
 
 Deep links: `?tab=accuracy`, `?layers=particles,cloud,precip`, `?t=27`,
-`?c=64.13,-21.90&z=12`, `?lang=is`.
+`?c=64.13,-21.90&z=12`, `?lang=is`, `?sheet=peek`.
+
+---
+
+## On a phone
+
+The panel becomes a **bottom sheet** with three rest positions — collapsed, half
+and full. Drag the handle, or tap it to toggle. The choice is remembered.
+
+Collapsed, the handle itself carries the live reading (`1.0 m/s A · hviða 3`), so
+folding the panel away to see the map costs you nothing you were actually looking
+at. Expanded, that line disappears — the hero says it better — and the handle
+shrinks to a grab strip so the rows get the space back.
+
+Everything that floats above the sheet — time scrubber, legend, map credit —
+stacks off a single `--stack` custom property, so it all rides up and down with
+the sheet in one transition. The legend only appears when the sheet is collapsed,
+since that is the only time there is a map worth reading it against. Tapping a
+station in the list collapses the sheet on the way to its popup.
+
+**Landscape is a different shape, so it gets a different pattern.** A bottom
+sheet on a 390 px-tall screen leaves a sliver of map, so below 900 px wide in
+landscape the panel becomes a side drawer that slides off to the right and leaves
+a 30 px grab strip behind. Same states, same control, horizontal drag axis.
+
+The map underneath is full-bleed and never resizes, so moving the sheet costs
+nothing beyond the compositor — no canvas reallocation, no re-projection. Snap
+heights and their transition live in CSS keyed off `body[data-sheet]`; JavaScript
+only picks the state and, mid-drag, writes a live height override.
+
+Also: `devicePixelRatio` is capped at 1.75 on phones (the trail fade touches
+every pixel of the canvas every frame, and 3× is not worth it), popups are
+clamped to the viewport width, and `viewport-fit=cover` plus
+`env(safe-area-inset-bottom)` keep the sheet clear of the home indicator.
 
 ---
 
@@ -158,7 +191,7 @@ data/verification.ndjson   accumulating model-vs-observation log (generated)
 public/index.html          page shell, {{token}} placeholders filled server-side
 public/i18n.js             string table, shared by server and browser
 public/app.js              map, particle engine, raster overlays, panels
-public/style.css           dark-surface design tokens
+public/style.css           dark-surface design tokens, bottom sheet, side drawer
 ```
 
 ### Endpoints

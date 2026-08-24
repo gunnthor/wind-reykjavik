@@ -11,6 +11,12 @@ import { STRINGS, LANGS, DEFAULT_LANG, translate } from './i18n.js';
 const $  = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 
+const MOBILE_Q = window.matchMedia('(max-width: 900px)');
+const isMobile = () => MOBILE_Q.matches;
+// Landscape phones get a side drawer rather than a bottom sheet, so the drag
+// axis and the snap arithmetic both flip.
+const isLandscape = () => window.matchMedia('(orientation: landscape)').matches;
+
 // ── Palette ────────────────────────────────────────────────────────────────
 // Single-hue blue sequential ramp, stepped dark→light for the dark surface.
 const RAMP = [
@@ -95,6 +101,7 @@ function setLang(lang) {
   buildLayerToggles();
   syncSliders();
   renderLegend();
+  renderSheetPeek();
   if (state.grid) { renderModelInfo(); renderTimeLabel(); }
   if (state.verify) { renderNow(); renderStations(); renderAccuracy(); }
 }
@@ -105,9 +112,15 @@ const map = L.map('map', {
   zoomSnap: 0.5, wheelPxPerZoomLevel: 120, attributionControl: true,
 }).setView([64.105, -21.87], 11);
 
+// The map option is a boolean; the prefix is configured on the control itself.
+// Dropping it keeps the credit line to one row on a phone.
+map.attributionControl.setPrefix(false);
+
 const CARTO = { subdomains: 'abcd', maxZoom: 20, attribution:
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a> · ' +
-  'wind <a href="https://open-meteo.com/">Open-Meteo</a>/DMI Harmonie · obs <a href="https://vedur.is/">Veðurstofa Íslands</a>' };
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> · ' +
+  '<a href="https://carto.com/attributions">CARTO</a> · ' +
+  '<a href="https://open-meteo.com/">Open-Meteo</a> · ' +
+  '<a href="https://vedur.is/">Veðurstofan</a>' };
 
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', CARTO).addTo(map);
 
@@ -171,7 +184,7 @@ class CanvasLayer {
     this.canvas.style.pointerEvents = 'none';
     map.getPane(pane).appendChild(this.canvas);
     this.ctx = this.canvas.getContext('2d');
-    this.dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.dpr = Math.min(window.devicePixelRatio || 1, isMobile() ? 1.75 : 2);
     this.resize();
   }
   resize() {
@@ -450,7 +463,8 @@ function renderStations() {
       icon: L.divIcon({ className: 'stn-marker', html, iconSize: [28, 28], iconAnchor: [14, 14] }),
       riseOnHover: true, keyboard: false,
     });
-    m.bindPopup(mode === 'obs' ? popupHTML(r) : forecastPopupHTML(r), { closeButton: true, maxWidth: 300 });
+    m.bindPopup(mode === 'obs' ? popupHTML(r) : forecastPopupHTML(r),
+      { closeButton: true, maxWidth: Math.min(300, window.innerWidth - 44), autoPanPadding: [16, 16] });
     m.stationId = r.id;
     markerLayer.addLayer(m);
   }
@@ -597,6 +611,8 @@ function renderNow() {
           on && r.gust != null ? ' / ' + r.gust.toFixed(0) : ''}</span></div></div>`;
     }).join('');
 
+  renderSheetPeek();
+
   $('#obsNote').innerHTML = forecast
     ? t('note.model', { when })
     : t('note.obs', { time: v.obsTime ?? '–', source: v.source });
@@ -691,6 +707,128 @@ function renderModelInfo() {
     <dt>${t('model.fetched')}</dt><dd>${new Date(m.generated).toLocaleString(dict().locale)}</dd>`;
 }
 
+// ── Bottom sheet (mobile) ──────────────────────────────────────────────────
+// Snap heights and the transition live in CSS, keyed off body[data-sheet];
+// this only picks the state and, mid-drag, writes a live --sheet-h override.
+// The map is full-bleed underneath and never resizes, so moving the sheet
+// costs nothing beyond the compositor.
+const SHEET_STATES = ['peek', 'half', 'full'];
+
+function sheetState() { return document.body.dataset.sheet || 'half'; }
+
+function setSheet(next, persist = true) {
+  if (!SHEET_STATES.includes(next)) return;
+  document.body.dataset.sheet = next;
+  document.body.style.removeProperty('--sheet-h');   // hand height back to CSS
+  $('#sheetHandle').setAttribute('aria-expanded', String(next !== 'peek'));
+  if (persist) { try { localStorage.setItem('sheet', next); } catch { /* private mode */ } }
+  renderSheetPeek();
+}
+
+// Collapsed, the handle is the only panel there is — so it carries the reading.
+function renderSheetPeek() {
+  const el = $('#sheetPeek');
+  if (!el) return;
+  if (!state.verify) { el.textContent = t('sheet.idle'); return; }
+  const { rows } = displayRows();
+  const live = rows.filter(r => r.valid && r.wind != null);
+  const hero = rows.find(r => r.id === 1 && r.valid && r.wind != null)
+            || rows.find(r => r.id === 1477 && r.valid && r.wind != null)
+            || live[0];
+  if (!hero) { el.textContent = t('sheet.idle'); return; }
+  el.innerHTML = t('sheet.peek', {
+    speed: `<b>${hero.wind.toFixed(1)}</b>`,
+    dir: dirName(hero.dir),
+    gust: fmt(hero.gust, 0),
+  });
+}
+
+function initSheet() {
+  let initial = 'half';
+  try {
+    const saved = localStorage.getItem('sheet');
+    if (SHEET_STATES.includes(saved)) initial = saved;
+  } catch { /* private mode */ }
+  document.body.dataset.sheet = initial;
+  $('#sheetHandle').setAttribute('aria-expanded', String(initial !== 'peek'));
+
+  const handle = $('#sheetHandle');
+  const panel = $('#panel');
+  let drag = null, suppressClick = false;
+
+  handle.addEventListener('pointerdown', (e) => {
+    if (!isMobile() || e.button) return;
+    drag = {
+      y: e.clientY, x: e.clientX, moved: false,
+      h: panel.getBoundingClientRect().height,
+      landscape: isLandscape(), want: null,
+    };
+    handle.setPointerCapture(e.pointerId);
+  });
+
+  handle.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    // In the landscape drawer the panel slides horizontally and CSS owns the
+    // whole transition, so there is no live height to track — just the intent.
+    if (drag.landscape) {
+      const dx = drag.x - e.clientX;
+      if (!drag.moved && Math.abs(dx) < 8) return;
+      drag.moved = true;
+      drag.want = dx > 0 ? 'half' : 'peek';       // dragging left opens it
+      return;
+    }
+    const dy = drag.y - e.clientY;
+    if (!drag.moved) {
+      if (Math.abs(dy) < 5) return;               // let a tap stay a tap
+      drag.moved = true;
+      document.body.dataset.dragging = '1';
+    }
+    const h = Math.max(44, Math.min(window.innerHeight * 0.92, drag.h + dy));
+    document.body.style.setProperty('--sheet-h', h + 'px');
+  });
+
+  const endDrag = (e) => {
+    if (!drag) return;
+    const moved = drag.moved, want = drag.want;
+    drag = null;
+    delete document.body.dataset.dragging;
+    if (handle.hasPointerCapture?.(e.pointerId)) handle.releasePointerCapture(e.pointerId);
+    if (!moved) return;                            // the click handler will act
+
+    if (want) {                                    // landscape: open or closed
+      suppressClick = true;
+      setTimeout(() => { suppressClick = false; }, 0);
+      setSheet(want);
+      return;
+    }
+
+    // Snap to whichever rest height is closest to where the finger let go.
+    const h = panel.getBoundingClientRect().height;
+    const vh = window.innerHeight;
+    const targets = { peek: 56, half: vh * 0.48, full: vh * 0.88 };
+    const nearest = Object.entries(targets)
+      .reduce((a, b) => (Math.abs(b[1] - h) < Math.abs(a[1] - h) ? b : a))[0];
+    suppressClick = true;
+    setTimeout(() => { suppressClick = false; }, 0);
+    setSheet(nearest);
+  };
+  handle.addEventListener('pointerup', endDrag);
+  handle.addEventListener('pointercancel', endDrag);
+
+  // Tap (and Enter/Space, since it is a real button) toggles open/closed.
+  handle.addEventListener('click', () => {
+    if (suppressClick) return;
+    setSheet(sheetState() === 'peek' ? 'half' : 'peek');
+  });
+
+  // Leaving mobile widths mid-session must not strand an inline height.
+  MOBILE_Q.addEventListener('change', () => {
+    document.body.style.removeProperty('--sheet-h');
+  });
+
+  renderSheetPeek();
+}
+
 // ── Legend ─────────────────────────────────────────────────────────────────
 function renderLegend() {
   const stops = RAMP.map(([v, c]) => `${c} ${(v / 32 * 100).toFixed(1)}%`).join(', ');
@@ -767,7 +905,11 @@ function fitToGrid(keepCenter) {
   if (keepCenter) { if (map.getZoom() < z) map.setZoom(z); return; }
   // Centre on the capital region, then nudge east so the city clears the panel.
   map.setView([64.12, -21.87], z, { animate: false });
-  if (window.innerWidth > 900) map.panBy([190, 0], { animate: false });
+  // Nudge the city clear of whatever is covering the view: the panel on the
+  // right at desktop widths, the sheet along the bottom on a phone.
+  if (!isMobile()) map.panBy([190, 0], { animate: false });
+  else if (isLandscape()) map.panBy([150, 0], { animate: false });
+  else map.panBy([0, -34], { animate: false });
 }
 
 async function loadGrid() {
@@ -867,6 +1009,7 @@ for (const sel of ['#stationList', '#cmpTable tbody']) {
     const id = Number(row.dataset.id);
     const r = state.verify.rows.find(x => x.id === id);
     if (!r) return;
+    if (isMobile()) setSheet('peek');       // get out of the way of the popup
     map.flyTo([r.lat, r.lon], Math.max(map.getZoom(), 12), { duration: 0.6 });
     markerLayer.eachLayer(m => { if (m.stationId === id) setTimeout(() => m.openPopup(), 620); });
   });
@@ -912,6 +1055,9 @@ function applyURLParams() {
     buildLayerToggles();
   }
 
+  const sheet = q.get('sheet');
+  if (sheet) setSheet(sheet, false);      // deep link, don't overwrite the saved choice
+
   const tab = q.get('tab');
   if (tab && $(`.tab[data-tab="${CSS.escape(tab)}"]`)) $(`.tab[data-tab="${CSS.escape(tab)}"]`).click();
 
@@ -940,6 +1086,7 @@ function applyURLParams() {
   }
   renderLegend();
   buildLayerToggles();
+  initSheet();
   try {
     await loadGrid();
   } catch (err) {

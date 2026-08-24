@@ -90,17 +90,33 @@ const HOURLY = ['wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m',
 
 // --- Tiny cache -------------------------------------------------------------
 const cache = new Map();
+const inflight = new Map();
+
 async function cached(key, ttlMs, fn) {
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < ttlMs) return hit.val;
-  try {
-    const val = await fn();
-    cache.set(key, { at: Date.now(), val });
-    return val;
-  } catch (err) {
-    if (hit) return hit.val;           // serve stale rather than fail
-    throw err;
-  }
+
+  // Coalesce concurrent misses. Without this the warmup and the first request
+  // each launch their own fetch of the same key — double the API spend, and
+  // enough parallel connections to trip Open-Meteo's concurrency limit.
+  const pending = inflight.get(key);
+  if (pending) return pending;
+
+  const job = (async () => {
+    try {
+      const val = await fn();
+      cache.set(key, { at: Date.now(), val });
+      return val;
+    } catch (err) {
+      if (hit) return hit.val;         // serve stale rather than fail
+      throw err;
+    } finally {
+      inflight.delete(key);
+    }
+  })();
+
+  inflight.set(key, job);
+  return job;
 }
 
 const r2 = (n) => (n == null || Number.isNaN(n) ? null : Math.round(n * 100) / 100);

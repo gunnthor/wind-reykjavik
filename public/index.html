@@ -2,7 +2,7 @@
 <html lang="{{__lang__}}">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <title>{{page.title}}</title>
 <meta name="description" content="{{app.subtitle}}">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -24,6 +24,17 @@
 
 <!-- ── Side panel ─────────────────────────────────────────── -->
 <aside id="panel" aria-label="{{app.panelLabel}}">
+  <!-- Mobile only: drag or tap to collapse the sheet and free up the map. -->
+  <button id="sheetHandle" class="sheet-handle" aria-controls="panel" aria-expanded="true"
+          data-i18n-aria="sheet.aria" aria-label="{{sheet.aria}}">
+    <span class="grip" aria-hidden="true"></span>
+    <span class="sheet-peek" id="sheetPeek"></span>
+    <svg class="sheet-chev" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 14 L12 9 L17 14" fill="none" stroke="currentColor" stroke-width="2.2"
+            stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </button>
+
   <nav class="tabs" role="tablist">
     <button class="tab is-on" data-tab="now"      role="tab" aria-selected="true"  data-i18n="tab.now">{{tab.now}}</button>
     <button class="tab"       data-tab="layers"   role="tab" aria-selected="false" data-i18n="tab.layers">{{tab.layers}}</button>

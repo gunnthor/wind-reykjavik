@@ -138,6 +138,10 @@ export const STRINGS = {
     'lang.switch': 'EN',
     'lang.switchTitle': 'Switch to English',
 
+    'sheet.aria': 'Draga upp eða niður til að sýna eða fela gögnin',
+    'sheet.peek': '{speed} m/s {dir} · hviða {gust}',
+    'sheet.idle': 'Sýna gögn',
+
     beaufort: ['logn', 'andvari', 'kul', 'gola', 'stinningsgola', 'kaldi', 'stinningskaldi',
                'allhvasst', 'hvassviðri', 'stormur', 'rok', 'ofsaveður', 'fárviðri'],
     compass: ['N', 'NNA', 'NA', 'ANA', 'A', 'ASA', 'SA', 'SSA',
@@ -274,6 +278,10 @@ export const STRINGS = {
 
     'lang.switch': 'IS',
     'lang.switchTitle': 'Skipta yfir á íslensku',
+
+    'sheet.aria': 'Drag up or down to show or hide the data panel',
+    'sheet.peek': '{speed} m/s {dir} · gust {gust}',
+    'sheet.idle': 'Show data',
 
     beaufort: ['calm', 'light air', 'light breeze', 'gentle breeze', 'moderate breeze',
                'fresh breeze', 'strong breeze', 'near gale', 'gale', 'strong gale',
