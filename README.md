@@ -18,13 +18,19 @@ The chips above the map choose **one background field**. Stacking wind speed,
 cloud and rain on top of each other produced mud and hid whichever one you
 actually wanted, so they are now exclusive:
 
-| Field | Source | Notes |
-|---|---|---|
-| **Wind** | model | continuous 10 m wind speed, blue sequential ramp |
-| **Temp** | model | 2 m temperature — faint tint, hue pivoting at freezing, with isotherms every 2 °C and the 0 °C line picked out |
-| **Rain** | model | precipitation rate, rain (aqua) vs snow (violet) |
-| **Cloud** | model | total cloud fraction, kept to a thin veil |
-| **None** | — | particles over a bare basemap |
+| Field | Notes |
+|---|---|
+| **Wind** | continuous 10 m wind speed, blue sequential ramp |
+| **Temp** | 2 m temperature — faint tint, hue pivoting at freezing, isotherms every 2 °C, 0 °C picked out brighter |
+| **Feels like** | apparent temperature: wind chill and humidity folded in. Same treatment, and it crosses zero far more often than the raw temperature does |
+| **Humidity** | 2 m relative humidity |
+| **Fog risk** | temperature minus dew point — a small gap means fog. Derived, not fetched |
+| **Rain** | precipitation rate, rain (aqua) vs snow (violet) |
+| **Cloud** | total cloud fraction, kept to a thin veil |
+| **Visibility** | inverted: the stronger the amber, the worse you can see |
+| **Snow depth** | snow lying on the ground |
+| **Freezing level** | height of the 0 °C line, contours every 100 m — the snow line on Esja and Bláfjöll |
+| **None** | particles over a bare basemap |
 
 On top of that, three independent overlays:
 
@@ -33,6 +39,15 @@ On top of that, three independent overlays:
 | **Wind flow** | model | particles advected through the interpolated field |
 | **Gust warnings** | model | zones above 20 / 28 / 35 m/s — a warning has to be able to sit on anything |
 | **Stations** | **observed** | 19 Veðurstofan sites, arrows pointing downwind |
+
+**What is deliberately missing.** Mean sea-level pressure was built as a field
+and then removed: measured across this domain it spans **under 1 hPa**, so 2 hPa
+isobars never trigger and the layer is a flat grey wash that says nothing. It is
+a synoptic-scale field and this is a 60 km box. It lives on the meteogram
+instead, where the *trend* is the whole point of a barometer. Checking the
+spatial spread of every variable before committing it to a chip is worth the two
+minutes — `speed`, `temp`, `feels like`, `humidity`, `dew point`, `visibility`
+and `freezing level` all carry real structure at 2 km; pressure does not.
 
 **On temperature.** A fixed diverging scale flooded the map: for most of the
 year every cell sits on one side of zero, so the whole domain washed to a single
@@ -44,12 +59,21 @@ Iceland that is the threshold that actually matters. The contour pass samples at
 3 px rather than 6, since the upscale would otherwise smear each crossing into a
 ribbon.
 
+The **Now** panel carries thirteen readings for Reykjavík — wind, gusts, gust
+factor, temperature, feels-like, humidity, dew point (flagged when it closes on
+the temperature), pressure, visibility, freezing level, cloud, rain and chance of
+rain — above a **48-hour meteogram**: temperature with apparent temperature,
+precipitation split rain/snow, wind with its gust envelope, and the pressure
+trace. Four stacked panels sharing one time axis rather than one plot with four
+y-scales, because temperature and pressure have nothing to calibrate against each
+other and overlaying them would only invite false readings of slope and crossing.
+
 The scrubber runs from 24 h in the past to 48 h ahead. Because observations only
 exist for the present, scrubbing off "now" switches the station points to the
 *model* sampled at those same coordinates, labelled as such — the map never mixes
 a stale reading into a forecast.
 
-Deep links: `?base=temp`, `?tab=accuracy`, `?layers=particles,gusts,stations`,
+Deep links: `?base=fog`, `?base=temp`, `?tab=accuracy`, `?layers=particles,gusts,stations`,
 `?t=27`, `?c=64.13,-21.90&z=12`, `?lang=is`, `?sheet=peek`. Older links that
 name a scalar in `?layers=` still work — the first one becomes the base field.
 
@@ -131,14 +155,23 @@ native resolution. It is free, keyless and CORS-open, so the browser could hit i
 directly; it is proxied here only to cache and to batch.
 
 - Grid: **21 × 34 = 714 points** at 0.02° lat × 0.04° lon, matching the native mesh.
-- Fields: wind speed/direction/gusts, cloud, precipitation, snowfall, temperature.
+- **16 variables**: wind speed/direction/gusts, temperature, apparent temperature,
+  humidity, dew point, precipitation and its probability, snowfall, snow depth,
+  cloud, pressure, visibility, freezing level, weather code.
 - Window: 72 hours (past 24 + next 48), hourly.
 - Terrain in the grid spans **0–854 m**, so Esja and Bláfjöll are genuinely resolved
   — the speed contrast between the fjord, the city and the highland is real, not
   interpolation.
-- One request per 300 points (the API is GET-only and rejects URIs past ~8 KB), so
-  the grid is fetched in three parallel chunks and stitched. ~1.3 MB of JSON,
-  330 KB gzipped, in about a second. Refreshed every 3 hours, 8 overnight — see
+- One request per 250 points (the API is GET-only and rejects URIs past ~8 KB), so
+  the grid is fetched in chunks and stitched. Those chunks go out **one at a time,
+  45 s apart**: fired in parallel they are ~1,200 weighted calls in a single
+  second, which trips the per-minute ceiling long before the daily one. Nothing
+  waits on this — it runs behind a disk cache — so pacing it costs nothing.
+- The payload is **split in two**. `/api/grid` carries the eight fields the first
+  paint needs (**316 KB gzipped**); the other nine ride `/api/grid/extra`
+  (**251 KB**) and are fetched once, in the background, a second after the map is
+  up. Selecting a field that needs them before then just waits for that one fetch.
+- Refreshed every 4 hours, 10 overnight — see
   [Staying inside the API budget](#staying-inside-the-api-budget).
 
 ### Observations — Veðurstofa Íslands
@@ -212,6 +245,7 @@ data/is-ip-ranges.json     Icelandic IPv4/IPv6 allocations, sorted and merged
 data/verification.ndjson   accumulating model-vs-observation log (generated)
 public/index.html          page shell, {{token}} placeholders filled server-side
 public/i18n.js             string table, shared by server and browser
+                           (the server imports it once — edits need a restart)
 public/app.js              map, particle engine, raster overlays, panels
 public/style.css           dark-surface design tokens, bottom sheet, side drawer
 ```
@@ -220,7 +254,8 @@ public/style.css           dark-surface design tokens, bottom sheet, side drawer
 
 | Route | What |
 |---|---|
-| `/api/grid` | the full wind/weather grid, gzipped, 3 h cache (8 h overnight) |
+| `/api/grid` | the eight core fields, gzipped, 4 h cache (10 h overnight) |
+| `/api/grid/extra` | the nine lazily-fetched fields, same cache |
 | `/api/obs` | live station observations as JSON, 1 min cache |
 | `/api/verify` | per-station model-vs-observed comparison + summary stats |
 | `/api/verify/history` | the accumulated hourly bias log |
@@ -257,15 +292,22 @@ demand-driven cache reaches its ceiling:
 
 | policy | refreshes/day | calls/day |
 |---|---|---|
-| flat 3 h, no quiet window | 8 | 5,712 |
-| 3 h active / 8 h quiet, 01:00–06:00 | 8 | 5,712 |
-| **3 h active / 8 h quiet, 22:00–06:00** *(default)* | **7** | **4,998** |
-| 4 h active / 8 h quiet, 22:00–06:00 | 5 | 3,570 |
-| 2 h active / 8 h quiet, 22:00–06:00 | 9 | 6,426 |
+| 3 h active / 8 h quiet, 7 variables | 7 | 4,998 |
+| **4 h active / 10 h quiet, 16 variables** *(default)* | **5** | **5,710** |
+| 3 h active / 10 h quiet, 16 variables | 7 | 7,994 |
+| 6 h active / 12 h quiet, 16 variables | 4 | 4,568 |
 
-Note the second row: a 01:00–06:00 quiet window is intuitive but buys nothing,
-because 19 active hours still round up to the same seven daytime refreshes. Eight
-quiet hours remove a whole refresh from the day.
+Note what happened when the variable count went from 7 to 16: Open-Meteo weights
+a request by **locations × max(1, variables/10)**, so each fetch went from 714
+calls to **1,142**. Widening the interval from 3 h to 4 h absorbed exactly that,
+and the daily total is where it started. More than doubling the data cost nothing
+per day — only freshness, and very little of that, because the grid carries 72 h
+of valid times: an older fetch still renders the current hour, just from an
+earlier model run.
+
+A narrower 01:00–06:00 quiet window is intuitive but buys nothing, because the
+remaining active hours still round up to the same number of refreshes. Eight or
+more quiet hours remove a whole one.
 
 **A longer TTL costs less freshness than it looks like it does.** The grid carries
 72 hours of valid times, so a grid fetched four hours ago still renders the
@@ -278,8 +320,9 @@ Knobs, all environment variables:
 
 | var | default | what |
 |---|---|---|
-| `GRID_TTL_MS` | `10800000` (3 h) | active-hours refresh interval |
-| `GRID_TTL_QUIET_MS` | `28800000` (8 h) | quiet-hours refresh interval |
+| `GRID_TTL_MS` | `14400000` (4 h) | active-hours refresh interval |
+| `GRID_TTL_QUIET_MS` | `36000000` (10 h) | quiet-hours refresh interval |
+| `CHUNK_GAP_MS` | `45000` | gap between upstream chunks, to respect the per-minute ceiling |
 | `QUIET_FROM` / `QUIET_TO` | `22` / `6` | quiet window, UTC hours; wraps midnight |
 | `OPEN_METEO_DAILY_BUDGET` | `9000` | soft cap below the 10,000 hard limit |
 

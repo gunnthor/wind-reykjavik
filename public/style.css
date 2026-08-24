@@ -47,7 +47,7 @@ html, body {
 }
 .leaflet-control-attribution a { color: var(--ink2) !important; }
 .leaflet-bottom.leaflet-right { margin-bottom: 62px; margin-right: var(--panel-w); }
-.leaflet-top.leaflet-left { margin-top: 96px; }
+.leaflet-top.leaflet-left { margin-top: 148px; }   /* clear of the field chips */
 
 /* ── Title card ─────────────────────────────────────────── */
 #titlecard {
@@ -71,11 +71,12 @@ html, body {
 
 /* ── Field chips ────────────────────────────────────────── */
 #basebar {
-  position: absolute; z-index: 620; top: 16px; left: 50%; transform: translateX(-50%);
+  position: absolute; z-index: 620; top: 92px; left: 16px;
+  max-width: calc(100vw - var(--panel-w) - 56px);
   display: flex; gap: 4px; padding: 4px;
   background: rgba(13, 13, 13, 0.82); border: 1px solid var(--border);
   border-radius: 10px; backdrop-filter: blur(12px);
-  max-width: calc(100vw - 32px); overflow-x: auto; scrollbar-width: none;
+  overflow-x: auto; scrollbar-width: none;
 }
 #basebar::-webkit-scrollbar { display: none; }
 .chip {
@@ -201,6 +202,10 @@ table.cmp tr:hover td { background: rgba(255, 255, 255, 0.04); }
 .dneg { color: var(--warning); font-weight: 600; }
 .dpos { color: var(--w4); font-weight: 600; }
 .dnil { color: #5c5b57; }
+
+.meteogram { background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 8px 6px 4px; }
+.meteogram svg { width: 100%; display: block; overflow: visible; }
+.meteogram .mg-empty { display: grid; place-items: center; height: 150px; color: #5c5b57; font-size: 11px; }
 
 .biaschart { height: 108px; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 6px; }
 .biaschart svg { width: 100%; height: 100%; display: block; overflow: visible; }

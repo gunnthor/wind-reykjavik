@@ -38,8 +38,12 @@ const PORT = Number(process.env.PORT) || 5173;
 // daytime refreshes. Eight quiet hours remove one whole refresh from the day.
 const QUIET_FROM = Number(process.env.QUIET_FROM ?? 22);   // inclusive
 const QUIET_TO   = Number(process.env.QUIET_TO   ?? 6);    // exclusive
-const TTL_ACTIVE = Number(process.env.GRID_TTL_MS)       || 3 * 60 * 60 * 1000;
-const TTL_QUIET  = Number(process.env.GRID_TTL_QUIET_MS) || 8 * 60 * 60 * 1000;
+// Widened from 3h/8h when the variable count went 7 -> 16: the per-fetch cost
+// rose by the same 1.6x, so the interval absorbs it and the daily total is
+// unchanged. Costs little freshness — the grid carries 72 h of valid times, so
+// an older fetch still renders the current hour, just from an earlier run.
+const TTL_ACTIVE = Number(process.env.GRID_TTL_MS)       || 4 * 60 * 60 * 1000;
+const TTL_QUIET  = Number(process.env.GRID_TTL_QUIET_MS) || 10 * 60 * 60 * 1000;
 
 const isQuietHour = (d = new Date()) => {
   const h = d.getUTCHours();
@@ -85,8 +89,19 @@ const GRID = { lat0: 63.96, lat1: 64.36, lon0: -22.52, lon1: -21.20, dlat: 0.02,
 GRID.nlat = Math.round((GRID.lat1 - GRID.lat0) / GRID.dlat) + 1;
 GRID.nlon = Math.round((GRID.lon1 - GRID.lon0) / GRID.dlon) + 1;
 
-const HOURLY = ['wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m',
-                'cloud_cover', 'precipitation', 'snowfall', 'temperature_2m'];
+// Open-Meteo bills roughly locations x max(1, variables/10), so variables are
+// not free: 16 of them makes each fetch cost 1.6 calls per point. That is paid
+// for by a longer TTL below rather than by asking for less.
+//
+// CORE is what the first paint needs; EXTRA is fetched by the browser only once
+// someone actually selects one of those fields. Both come from the same upstream
+// request — the split is purely about what crosses the wire to the client.
+const HOURLY_CORE = ['wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m',
+                     'temperature_2m', 'cloud_cover', 'precipitation', 'snowfall'];
+const HOURLY_EXTRA = ['apparent_temperature', 'relative_humidity_2m', 'dew_point_2m',
+                      'precipitation_probability', 'snow_depth', 'pressure_msl',
+                      'visibility', 'freezing_level_height', 'weather_code'];
+const HOURLY = [...HOURLY_CORE, ...HOURLY_EXTRA];
 
 // --- Tiny cache -------------------------------------------------------------
 const cache = new Map();
@@ -133,30 +148,54 @@ async function fetchGrid() {
 
   // Open-Meteo answers on GET only and rejects request URIs past ~8 KB, so the
   // point list is split into chunks and stitched back together in order.
-  const CHUNK = 300;
-  const jobs = [];
-  for (let s = 0; s < lats.length; s += CHUNK) {
-    const la = lats.slice(s, s + CHUNK), lo = lons.slice(s, s + CHUNK);
+  //
+  // The chunks go out one at a time with a gap between them. Fired in parallel
+  // they are 250 points x 1.6 weight x 3 = ~1,200 calls in a single second,
+  // which trips the per-minute ceiling long before the daily one. Nothing is
+  // waiting on this — it runs every few hours behind a disk cache — so pacing
+  // it costs nothing that matters.
+  const CHUNK = 250;
+  const GAP_MS = Number(process.env.CHUNK_GAP_MS ?? 45000);
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  const fetchChunk = async (la, lo, attempt = 0) => {
     const url = 'https://api.open-meteo.com/v1/forecast'
       + '?latitude=' + la.join(',')
       + '&longitude=' + lo.join(',')
       + '&hourly=' + HOURLY.join(',')
       + '&models=dmi_seamless&forecast_days=2&past_days=1'
       + '&wind_speed_unit=ms&timezone=GMT';
-    jobs.push((async () => {
-      const res = await fetch(url, { signal: AbortSignal.timeout(90000) });
-      if (!res.ok) throw new Error('open-meteo ' + res.status + ' ' + (await res.text()).slice(0, 200));
+    const res = await fetch(url, { signal: AbortSignal.timeout(90000) });
+    if (res.ok) {
       const raw = await res.json();
       return Array.isArray(raw) ? raw : [raw];
-    })());
+    }
+    const body = (await res.text()).slice(0, 200);
+    // A minutely refusal is worth waiting out; a daily one is not.
+    if (res.status === 429 && attempt < 3 && /minutely/i.test(body)) {
+      console.warn('open-meteo minutely limit — retrying in 65 s');
+      await sleep(65000);
+      return fetchChunk(la, lo, attempt + 1);
+    }
+    throw new Error('open-meteo ' + res.status + ' ' + body);
+  };
+
+  const pts = [];
+  for (let i = 0; i < lats.length; i += CHUNK) {
+    if (i > 0) await sleep(GAP_MS);
+    pts.push(...await fetchChunk(lats.slice(i, i + CHUNK), lons.slice(i, i + CHUNK)));
   }
-  const pts = (await Promise.all(jobs)).flat();
   if (pts.length !== lats.length) throw new Error('expected ' + lats.length + ' points, got ' + pts.length);
 
   const times = pts[0].hourly.time;
   const nt = times.length, nc = pts.length;
   const mk = () => Array.from({ length: nt }, () => new Array(nc).fill(0));
-  const out = { u: mk(), v: mk(), speed: mk(), gust: mk(), cloud: mk(), precip: mk(), snow: mk(), temp: mk() };
+
+  const core = { u: mk(), v: mk(), speed: mk(), gust: mk(), cloud: mk(), precip: mk(), snow: mk(), temp: mk() };
+  const extra = { app: mk(), rh: mk(), dew: mk(), pprob: mk(), snowd: mk(),
+                  pmsl: mk(), vis: mk(), fzl: mk(), wcode: mk() };
+
+  const r0 = (n) => (n == null || Number.isNaN(n) ? null : Math.round(n));
 
   for (let c = 0; c < nc; c++) {
     const h = pts[c].hourly;
@@ -165,14 +204,25 @@ async function fetchGrid() {
       const dir = h.wind_direction_10m[t] ?? 0;
       // Meteorological direction is where the wind blows FROM.
       const rad = dir * Math.PI / 180;
-      out.u[t][c] = r2(-sp * Math.sin(rad));   // eastward m/s
-      out.v[t][c] = r2(-sp * Math.cos(rad));   // northward m/s
-      out.speed[t][c] = r2(sp);
-      out.gust[t][c] = r2(h.wind_gusts_10m[t]);
-      out.cloud[t][c] = h.cloud_cover[t];
-      out.precip[t][c] = r2(h.precipitation[t]);
-      out.snow[t][c] = r2(h.snowfall[t]);
-      out.temp[t][c] = r2(h.temperature_2m[t]);
+      core.u[t][c] = r2(-sp * Math.sin(rad));   // eastward m/s
+      core.v[t][c] = r2(-sp * Math.cos(rad));   // northward m/s
+      core.speed[t][c] = r2(sp);
+      core.gust[t][c] = r2(h.wind_gusts_10m[t]);
+      core.cloud[t][c] = h.cloud_cover[t];
+      core.precip[t][c] = r2(h.precipitation[t]);
+      core.snow[t][c] = r2(h.snowfall[t]);
+      core.temp[t][c] = r2(h.temperature_2m[t]);
+
+      extra.app[t][c] = r2(h.apparent_temperature[t]);
+      extra.rh[t][c] = r0(h.relative_humidity_2m[t]);
+      extra.dew[t][c] = r2(h.dew_point_2m[t]);
+      extra.pprob[t][c] = r0(h.precipitation_probability[t]);
+      extra.snowd[t][c] = r2((h.snow_depth[t] ?? 0) * 100);   // m -> cm
+      extra.pmsl[t][c] = r2(h.pressure_msl[t]);
+      // Metres, but nobody needs them to the metre; this compresses far better.
+      extra.vis[t][c] = h.visibility[t] == null ? null : Math.round(h.visibility[t] / 100) * 100;
+      extra.fzl[t][c] = h.freezing_level_height[t] == null ? null : Math.round(h.freezing_level_height[t] / 10) * 10;
+      extra.wcode[t][c] = r0(h.weather_code[t]);
     }
   }
 
@@ -182,11 +232,13 @@ async function fetchGrid() {
       resolutionKm: 2,
       generated: new Date().toISOString(),
       grid: { ...GRID },
+      variables: HOURLY.length,
       elevationRange: [Math.min(...pts.map(p => p.elevation)), Math.max(...pts.map(p => p.elevation))],
     },
     times,
     elevation: pts.map(p => p.elevation),
-    ...out,
+    ...core,
+    extra,
   };
 }
 
@@ -198,7 +250,7 @@ const diskAge = (g) => Date.now() - Date.parse(g?.meta?.generated ?? 0);
 // A rate-limited or unreachable upstream should not blank the map: the last
 // good grid is kept on disk and served (flagged stale) until a fetch succeeds.
 async function fetchGridCached() {
-  const cost = GRID.nlat * GRID.nlon;
+  const cost = Math.round(GRID.nlat * GRID.nlon * Math.max(1, HOURLY.length / 10));
   const disk = await readDiskGrid();
 
   // Cold start after a restart: a disk grid still inside the current TTL is
@@ -541,14 +593,23 @@ function sendJSON(req, res, obj, maxAge = 0) {
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname;
   try {
-    if (path === '/api/grid')     return sendJSON(req, res, await cached('grid', gridTtl(), fetchGridCached), 300);
+    if (path === '/api/grid') {
+      const { extra, ...core } = await cached('grid', gridTtl(), fetchGridCached);
+      return sendJSON(req, res, core, 300);
+    }
+    if (path === '/api/grid/extra') {
+      const g = await cached('grid', gridTtl(), fetchGridCached);
+      return sendJSON(req, res, { generated: g.meta.generated, times: g.times, ...g.extra }, 300);
+    }
     if (path === '/api/obs')      return sendJSON(req, res, await cached('obs', 60000, fetchObs));
     if (path === '/api/stations') return sendJSON(req, res, await loadStations(), 3600);
     if (path === '/api/verify')   return sendJSON(req, res, await cached('verify', 60000, buildVerification));
     if (path === '/api/verify/history') return sendJSON(req, res, await verificationHistory());
     if (path === '/api/health') {
       const g = cache.get('grid');
-      const cost = GRID.nlat * GRID.nlon;
+      // Open-Meteo weights a request by variables/10 as well as by location.
+      const weight = Math.max(1, HOURLY.length / 10);
+      const cost = Math.round(GRID.nlat * GRID.nlon * weight);
       const u = await loadUsage();
       // Worst case assumes traffic in every hour, which is the only way a
       // demand-driven cache reaches its ceiling.
@@ -559,7 +620,10 @@ const server = createServer(async (req, res) => {
         ok: true,
         cached: [...cache.keys()],
         grid: GRID,
-        gridPoints: cost,
+        gridPoints: GRID.nlat * GRID.nlon,
+        variables: HOURLY.length,
+        callWeight: weight,
+        callsPerFetch: cost,
         gridGenerated: g?.val?.meta?.generated ?? null,
         gridStale: g?.val?.meta?.stale ?? false,
         gridStaleReason: g?.val?.meta?.staleReason ?? null,

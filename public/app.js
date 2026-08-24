@@ -11,8 +11,42 @@ import { STRINGS, LANGS, DEFAULT_LANG, translate } from './i18n.js';
 const $  = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 
-const BASE_FIELDS = ['speed', 'temp', 'precip', 'cloud', 'none'];
+// How each background field is drawn. Everything the raster loop needs lives
+// here, so adding a field is a table entry rather than another branch.
+//
+//   ramp     sequential through the wind ramp        (speed)
+//   diverge  hue pivots at zero, faint tint + contours (temp, feels-like)
+//   contour  faint tint by value + contour lines      (freezing level)
+//   seq      one hue, alpha rises with value          (humidity, cloud, snow)
+//   seqInv   one hue, alpha rises as value FALLS      (visibility: worse = louder)
+//   precip   hue by type, alpha by rate
+//
+// `extra: true` means the field lives in the lazily fetched bundle.
+const FIELDS = {
+  speed:      { src: 'speed',  kind: 'ramp',    max: 24, alpha: 0.60 },
+  temp:       { src: 'temp',   kind: 'diverge', span: 18, step: 2, tint: 0.22 },
+  apparent:   { src: 'app',    kind: 'diverge', span: 18, step: 2, tint: 0.22, extra: true },
+  humidity:   { src: 'rh',     kind: 'seq',     lo: 45, hi: 100, rgb: [27, 175, 122], alpha: 0.46, extra: true },
+  precip:     { src: 'precip', kind: 'precip' },
+  cloud:      { src: 'cloud',  kind: 'seq',     lo: 8, hi: 100, rgb: [226, 232, 240], alpha: 0.30, gamma: 1.6 },
+  // Mean sea-level pressure is a synoptic field: measured across this domain it
+  // spans under 1 hPa, so as a 2 km map layer it is a flat grey wash that says
+  // nothing. It earns its place on the meteogram instead, where the trend is
+  // the point. What does vary here is the dew-point spread — sea fog rolling
+  // into Faxaflói is a local, visible thing.
+  fog:        { derive: (S, la, lo) => sampleAt(S.temp, la, lo) - sampleAt(S.dew, la, lo),
+                kind: 'seqInv', lo: 0, hi: 5, rgb: [201, 209, 222], alpha: 0.55, extra: true },
+  visibility: { src: 'vis',    kind: 'seqInv',  lo: 200, hi: 20000, rgb: [237, 161, 0], alpha: 0.55, extra: true },
+  snowdepth:  { src: 'snowd',  kind: 'seq',     lo: 0.5, hi: 50, rgb: [144, 133, 233], alpha: 0.62, extra: true },
+  freezing:   { src: 'fzl',    kind: 'contour', step: 100, lo: 0, hi: 2400, rgb: [134, 182, 239], tint: 0.24, extra: true },
+  none:       null,
+};
+const BASE_FIELDS = ['speed', 'temp', 'apparent', 'humidity', 'fog', 'precip', 'cloud',
+                     'visibility', 'snowdepth', 'freezing', 'none'];
 const OVERLAYS = ['particles', 'gusts', 'stations'];
+
+const CORE_KEYS = ['u', 'v', 'speed', 'gust', 'cloud', 'precip', 'snow', 'temp'];
+const EXTRA_KEYS = ['app', 'rh', 'dew', 'pprob', 'snowd', 'pmsl', 'vis', 'fzl', 'wcode'];
 
 const MOBILE_Q = window.matchMedia('(max-width: 900px)');
 const isMobile = () => MOBILE_Q.matches;
@@ -74,6 +108,7 @@ const state = {
   // because a warning has to be able to sit on top of anything.
   base: 'speed',
   layers: { particles: true, gusts: false, stations: true },
+  extraLoaded: false,
   density: 5000, rate: 12, trail: 9, playing: false,
   lang: DEFAULT_LANG,
 };
@@ -163,9 +198,14 @@ function rebuildSlice() {
   const f = Math.max(0, Math.min(1, state.tIndex - t0));
 
   const out = {};
-  for (const k of ['u', 'v', 'speed', 'gust', 'cloud', 'precip', 'snow', 'temp']) {
-    const a = g[k][t0], b = g[k][t1], arr = new Float32Array(n);
-    for (let i = 0; i < n; i++) arr[i] = a[i] + (b[i] - a[i]) * f;
+  for (const k of [...CORE_KEYS, ...EXTRA_KEYS]) {
+    const series = g[k];
+    if (!series) continue;                    // extra bundle not fetched yet
+    const a = series[t0], b = series[t1], arr = new Float32Array(n);
+    // Weather codes are categorical — blending 61 and 71 would invent a code
+    // that means neither, so they step rather than interpolate.
+    if (k === 'wcode') for (let i = 0; i < n; i++) arr[i] = f < 0.5 ? a[i] : b[i];
+    else for (let i = 0; i < n; i++) arr[i] = a[i] + (b[i] - a[i]) * f;
     out[k] = arr;
   }
   state.slice = out;
@@ -228,13 +268,18 @@ class RasterLayer extends CanvasLayer {
     this.offCtx = this.off.getContext('2d');
   }
   draw() {
-    const base = state.base;
+    const spec = FIELDS[state.base];
     this.clear();
-    if ((base === 'none' && !state.layers.gusts) || !state.slice) return;
+    if ((!spec && !state.layers.gusts) || !state.slice) return;
 
+    const arr = spec && spec.src ? state.slice[spec.src] : null;
+    // A derived field has no single source array — it is computed per sample.
+    const derive = spec?.derive;
+    const ready = !spec || arr || (derive && state.slice.temp && state.slice.dew);
+    const contoured = !!spec && (spec.kind === 'diverge' || spec.kind === 'contour');
     // Contours need a finer sample step than a smooth wash does: at RC the
     // upscale smears a crossing into a ribbon roughly 2 * RC wide.
-    const rc = base === 'temp' ? 3 : RC;
+    const rc = contoured ? 3 : RC;
     const cols = Math.ceil(this.w / rc) + 1, rows = Math.ceil(this.h / rc) + 1;
     const { lats, lons } = axisLatLon(cols, rows, rc);
     this.off.width = cols; this.off.height = rows;
@@ -249,57 +294,69 @@ class RasterLayer extends CanvasLayer {
         const lon = lons[c], o = (r * cols + c) * 4;
         let cr = 0, cg = 0, cb = 0, ca = 0;
 
-        if (base === 'speed') {
-          const v = sampleAt(S.speed, lat, lon);
-          if (v === v) {
-            const col = windRGB(v);
-            const a = Math.min(0.60, 0.08 + Math.pow(Math.min(v, 24) / 24, 0.72) * 0.52);
-            cr = col[0]; cg = col[1]; cb = col[2]; ca = a;
-          }
-        } else if (base === 'temp') {
-          const tv = sampleAt(S.temp, lat, lon);
-          if (tv === tv) {
-            // Hue pivots at freezing, which is the threshold that actually
-            // matters here; the tint stays faint because a full-strength wash
-            // over the whole domain floods the map on any day that sits wholly
-            // on one side of zero — which, in summer, is every day.
-            const col = hex2rgb(tv < 0 ? TEMP_COLD : TEMP_WARM);
-            cr = col[0]; cg = col[1]; cb = col[2];
-            ca = Math.pow(Math.min(Math.abs(tv), TEMP_SPAN) / TEMP_SPAN, 0.9) * 0.22;
+        const v = derive ? derive(S, lat, lon) : (arr ? sampleAt(arr, lat, lon) : NaN);
+        if (v === v) {
+          const kind = spec.kind;
 
-            // The structure is carried by isotherms: a contour lands wherever a
-            // neighbouring sample falls in a different 2° band. Crisper than a
-            // neutral band, whose width would vary with the local gradient.
-            const tr = sampleAt(S.temp, lat, lons[Math.min(c + 1, cols - 1)]);
-            const tb = sampleAt(S.temp, latBelow, lon);
-            const band = Math.floor(tv / TEMP_STEP);
+          if (kind === 'ramp') {
+            const col = windRGB(v);
+            cr = col[0]; cg = col[1]; cb = col[2];
+            ca = Math.min(spec.alpha, 0.08 + Math.pow(Math.min(v, spec.max) / spec.max, 0.72) * (spec.alpha - 0.08));
+
+          } else if (kind === 'seq' || kind === 'seqInv') {
+            const span = spec.hi - spec.lo;
+            let x = (v - spec.lo) / span;
+            if (kind === 'seqInv') x = 1 - x;
+            if (x > 0) {
+              x = Math.min(1, x);
+              cr = spec.rgb[0]; cg = spec.rgb[1]; cb = spec.rgb[2];
+              ca = Math.pow(x, spec.gamma ?? 1) * spec.alpha;
+            }
+
+          } else if (kind === 'precip') {
+            if (v > 0.02) {
+              const sv = sampleAt(state.slice.snow, lat, lon);
+              const col = hex2rgb(sv === sv && sv > 0.02 ? SNOW : RAIN);
+              // No opacity floor: drizzle at 0.1 mm/h must not read like a downpour.
+              cr = col[0]; cg = col[1]; cb = col[2];
+              ca = Math.pow(Math.min(v, 1), 0.5) * 0.52;
+            }
+
+          } else {
+            // diverge and contour share the contour pass; they differ only in
+            // how the underlying tint is coloured.
+            if (kind === 'diverge') {
+              // Hue pivots at freezing, the threshold that actually matters
+              // here. The tint stays faint because a full-strength wash floods
+              // the map on any day sitting wholly on one side of zero — which,
+              // in summer, is every day.
+              const col = hex2rgb(v < 0 ? TEMP_COLD : TEMP_WARM);
+              cr = col[0]; cg = col[1]; cb = col[2];
+              ca = Math.pow(Math.min(Math.abs(v), spec.span) / spec.span, 0.9) * spec.tint;
+            } else {
+              const x = Math.max(0, Math.min(1, (v - spec.lo) / (spec.hi - spec.lo)));
+              cr = spec.rgb[0]; cg = spec.rgb[1]; cb = spec.rgb[2];
+              ca = (0.25 + x * 0.75) * spec.tint;
+            }
+
+            // A contour lands wherever a neighbouring sample falls in a
+            // different band. Crisper than a neutral band, whose width would
+            // otherwise vary with the local gradient.
+            const nr = sampleAt(arr, lat, lons[Math.min(c + 1, cols - 1)]);
+            const nb = sampleAt(arr, latBelow, lon);
+            const band = Math.floor(v / spec.step);
             let line = 0;
             for (let k = 0; k < 2; k++) {
-              const nv = k ? tb : tr;
-              if (nv !== nv || Math.floor(nv / TEMP_STEP) === band) continue;
-              line = Math.max(line, (nv < 0) !== (tv < 0) ? 2 : 1);
+              const nv = k ? nb : nr;
+              if (nv !== nv || Math.floor(nv / spec.step) === band) continue;
+              // Zero is special for the diverging fields: it is the freezing line.
+              line = Math.max(line, (kind === 'diverge' && (nv < 0) !== (v < 0)) ? 2 : 1);
             }
             if (line === 2) {
               cr = FREEZE_LINE[0]; cg = FREEZE_LINE[1]; cb = FREEZE_LINE[2]; ca = 0.9;
             } else if (line === 1) {
               cr = ISOTHERM[0]; cg = ISOTHERM[1]; cb = ISOTHERM[2]; ca = 0.42;
             }
-          }
-        } else if (base === 'precip') {
-          const pv = sampleAt(S.precip, lat, lon), sv = sampleAt(S.snow, lat, lon);
-          if (pv === pv && pv > 0.02) {
-            const col = hex2rgb(sv === sv && sv > 0.02 ? SNOW : RAIN);
-            // No opacity floor: drizzle at 0.1 mm/h must not read like a downpour.
-            const a = Math.pow(Math.min(pv, 1), 0.5) * 0.52;
-            cr = col[0]; cg = col[1]; cb = col[2]; ca = a;
-          }
-        } else if (base === 'cloud') {
-          const cv = sampleAt(S.cloud, lat, lon);
-          if (cv === cv && cv > 8) {
-            // Iceland is overcast most of the time, so this stays a thin veil —
-            // strong enough to read, light enough to keep the map underneath.
-            const a = Math.min(0.30, Math.pow(cv / 100, 1.6) * 0.30);
-            cr = CLOUD_RGB[0]; cg = CLOUD_RGB[1]; cb = CLOUD_RGB[2]; ca = a;
           }
         }
 
@@ -637,6 +694,26 @@ function renderNow() {
       ? (gusts.reduce((a, b) => a + b, 0) / gusts.length /
          (speeds.reduce((a, b) => a + b, 0) / speeds.length)).toFixed(2) : '–', '×', t('tile.gustOverWind')],
   ];
+
+  // The remaining nine variables arrive in the lazy bundle, so these tiles
+  // appear a moment after the first paint rather than holding it up.
+  const at = (k) => (S && S[k] ? sampleAt(S[k], center.lat, center.lon) : NaN);
+  if (state.extraLoaded) {
+    const app = at('app'), rh = at('rh'), dew = at('dew');
+    const pmsl = at('pmsl'), vis = at('vis'), fzl = at('fzl'), pprob = at('pprob');
+    const temp = at('temp');
+    const spread = (temp === temp && dew === dew) ? temp - dew : NaN;
+    tiles.push(
+      [t('tile.feels'), app === app ? app.toFixed(1) : '–', '°C', t('tile.modelNow')],
+      [t('tile.humidity'), rh === rh ? rh.toFixed(0) : '–', '%', t('tile.modelNow')],
+      [t('tile.dew'), dew === dew ? dew.toFixed(1) : '–', '°C',
+        spread === spread && spread < 1.5 ? t('tile.fogNear') : t('tile.modelNow')],
+      [t('tile.pressure'), pmsl === pmsl ? pmsl.toFixed(0) : '–', 'hPa', t('tile.modelNow')],
+      [t('tile.visibility'), vis === vis ? (vis / 1000).toFixed(vis < 10000 ? 1 : 0) : '–', 'km', t('tile.modelNow')],
+      [t('tile.freezing'), fzl === fzl ? fzl.toFixed(0) : '–', 'm', t('tile.modelNow')],
+      [t('tile.pprob'), pprob === pprob ? pprob.toFixed(0) : '–', '%', t('tile.modelNow')],
+    );
+  }
   $('#tiles').innerHTML = tiles.map(([k, val, u, s]) =>
     `<div class="tile"><div class="tile-k">${k}</div>
       <div class="tile-v">${val}<span class="unit">${u}</span></div>
@@ -657,6 +734,7 @@ function renderNow() {
     }).join('');
 
   renderSheetPeek();
+  renderMeteogram();
 
   $('#obsNote').innerHTML = forecast
     ? t('note.model', { when })
@@ -874,6 +952,23 @@ function initSheet() {
   renderSheetPeek();
 }
 
+// Nine of the sixteen variables are only needed once someone picks a field that
+// uses them, so they ride a second endpoint and are fetched at most once.
+let extraPromise = null;
+function ensureExtra() {
+  if (state.extraLoaded) return Promise.resolve();
+  if (!extraPromise) {
+    extraPromise = get('/api/grid/extra')
+      .then(x => {
+        for (const k of EXTRA_KEYS) if (x[k]) state.grid[k] = x[k];
+        state.extraLoaded = true;
+        rebuildSlice();
+      })
+      .finally(() => { extraPromise = null; });
+  }
+  return extraPromise;
+}
+
 // ── Field chips ────────────────────────────────────────────────────────────
 function buildBaseBar() {
   $('#basebar').innerHTML = BASE_FIELDS.map(k =>
@@ -882,7 +977,7 @@ function buildBaseBar() {
        title="${t('base.' + k + '.d')}">${t('base.' + k)}</button>`).join('');
 }
 
-function setBase(next, persist = true) {
+async function setBase(next, persist = true) {
   if (!BASE_FIELDS.includes(next)) return;
   state.base = next;
   if (persist) { try { localStorage.setItem('base', next); } catch { /* private mode */ } }
@@ -892,8 +987,157 @@ function setBase(next, persist = true) {
     el.setAttribute('aria-checked', String(on));
   }
   for (const el of $$('#layerToggles input[data-base]')) el.checked = el.dataset.base === next;
-  raster?.draw();
   renderLegend();
+
+  if (FIELDS[next]?.extra && !state.extraLoaded) {
+    toast(t('toast.loadingField'), 1600);
+    try { await ensureExtra(); } catch (err) {
+      toast(String(err.message), 5000);
+      return;
+    }
+    if (state.base !== next) return;          // someone picked something else meanwhile
+  }
+  raster?.draw();
+  renderNow();
+}
+
+// ── Meteogram ──────────────────────────────────────────────────────────────
+// Three measures on three stacked panels sharing one time axis, rather than one
+// plot with several y-scales: temperature, precipitation and wind have nothing
+// in common to calibrate against, so overlaying them would only invite false
+// comparisons of slope and crossing points.
+const MG_LAT = 64.135, MG_LON = -21.90;
+
+function renderMeteogram() {
+  const el = $('#meteogram');
+  if (!el || !state.grid) return;
+  const g = state.grid;
+  const start = Math.max(0, Math.round(state.nowIndex));
+  const end = Math.min(g.times.length, start + 49);
+  const n = end - start;
+  if (n < 6) { el.innerHTML = `<div class="mg-empty">${t('acc.noRounds')}</div>`; return; }
+
+  const pick = (key) => {
+    const series = g[key];
+    if (!series) return null;
+    const out = [];
+    for (let i = start; i < end; i++) out.push(sampleAt(series[i], MG_LAT, MG_LON));
+    return out.every(v => v === v) ? out : null;
+  };
+  const temp = pick('temp'), app = pick('app');
+  const rain = pick('precip'), snow = pick('snow');
+  const wind = pick('speed'), gust = pick('gust');
+  if (!temp || !wind) { el.innerHTML = `<div class="mg-empty">${t('acc.noRounds')}</div>`; return; }
+
+  const W = 320, PADL = 26, PADR = 8, GAP = 12, PH = 46;
+  const X = (i) => PADL + i / (n - 1) * (W - PADL - PADR);
+  const panels = [];
+  let y = 0;
+
+  // Shared chrome: day boundaries and the "now" marker, drawn on every panel.
+  const marks = (top, h) => {
+    let out = '';
+    for (let i = 0; i < n; i++) {
+      const hh = new Date(g.times[start + i] + 'Z').getUTCHours();
+      if (hh === 0) out += `<line x1="${X(i).toFixed(1)}" x2="${X(i).toFixed(1)}" y1="${top}" y2="${top + h}" stroke="#2c2c2a" stroke-width="1"/>`;
+    }
+    const nowX = X(Math.max(0, state.nowIndex - start));
+    out += `<line x1="${nowX.toFixed(1)}" x2="${nowX.toFixed(1)}" y1="${top}" y2="${top + h}" stroke="#898781" stroke-width="1" stroke-dasharray="2 2"/>`;
+    return out;
+  };
+
+  // Two series on one panel need identifying, so the title row doubles as a key.
+  const label = (top, txt, keys = []) => {
+    let out = `<text x="0" y="${top - 5}" fill="#898781" font-size="8.5" letter-spacing="0.06em">${txt.toUpperCase()}</text>`;
+    let x = W - PADR;
+    for (const [colour, name] of [...keys].reverse()) {
+      out = `<text x="${x}" y="${top - 5}" fill="#c3c2b7" font-size="8" text-anchor="end">${name}</text>` + out;
+      x -= name.length * 4.1 + 5;
+      out = `<circle cx="${x.toFixed(1)}" cy="${top - 7.5}" r="2.4" fill="${colour}"/>` + out;
+      x -= 9;
+    }
+    return out;
+  };
+
+  // 1 — temperature, with apparent temperature alongside it.
+  {
+    const all = app ? temp.concat(app) : temp;
+    let lo = Math.min(...all), hi = Math.max(...all);
+    if (hi - lo < 4) { const m = (hi + lo) / 2; lo = m - 2; hi = m + 2; }
+    const Y = (v) => y + PH - (v - lo) / (hi - lo) * PH;
+    const path = (arr) => arr.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join(' ');
+    let sec = label(y, t('mg.temp'),
+      app ? [['#3987e5', t('mg.tempLine')], ['#d95926', t('mg.appLine')]] : []) + marks(y, PH);
+    if (lo < 0 && hi > 0) {
+      sec += `<line x1="${PADL}" x2="${W - PADR}" y1="${Y(0).toFixed(1)}" y2="${Y(0).toFixed(1)}" stroke="#383835" stroke-width="1" stroke-dasharray="3 3"/>`;
+    }
+    if (app) sec += `<path d="${path(app)}" fill="none" stroke="#d95926" stroke-width="1.4" stroke-linejoin="round" opacity="0.85"/>`;
+    sec += `<path d="${path(temp)}" fill="none" stroke="#3987e5" stroke-width="2" stroke-linejoin="round"/>`;
+    sec += `<text x="${PADL - 4}" y="${Math.max(Y(hi), y) + 9}" fill="#898781" font-size="8" text-anchor="end">${hi.toFixed(0)}</text>`;
+    sec += `<text x="${PADL - 4}" y="${Y(lo)}" fill="#898781" font-size="8" text-anchor="end">${lo.toFixed(0)}</text>`;
+    panels.push(sec);
+    y += PH + GAP + 8;
+  }
+
+  // 2 — precipitation, split rain vs snow.
+  if (rain) {
+    const hi = Math.max(0.6, ...rain);
+    const bw = Math.max(1.5, (W - PADL - PADR) / n - 1);
+    let sec = label(y, t('mg.precip')) + marks(y, PH);
+    rain.forEach((v, i) => {
+      if (v <= 0.02) return;
+      const h = Math.max(1, v / hi * PH);
+      const snowy = snow && snow[i] > 0.02;
+      sec += `<rect x="${(X(i) - bw / 2).toFixed(1)}" y="${(y + PH - h).toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" fill="${snowy ? SNOW : RAIN}" rx="1"/>`;
+    });
+    sec += `<line x1="${PADL}" x2="${W - PADR}" y1="${y + PH}" y2="${y + PH}" stroke="#383835" stroke-width="1"/>`;
+    sec += `<text x="${PADL - 4}" y="${y + 9}" fill="#898781" font-size="8" text-anchor="end">${hi.toFixed(1)}</text>`;
+    panels.push(sec);
+    y += PH + GAP + 8;
+  }
+
+  // 3 — wind, with the gust envelope behind the mean.
+  {
+    const hi = Math.max(6, ...(gust ?? wind));
+    const Y = (v) => y + PH - v / hi * PH;
+    let sec = label(y, t('mg.wind'),
+      gust ? [['#86b6ef', t('mg.windLine')], ['#2a5f96', t('mg.gustBand')]] : []) + marks(y, PH);
+    if (gust) {
+      const top = gust.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join(' ');
+      sec += `<path d="${top} L${X(n - 1).toFixed(1)} ${y + PH} L${X(0).toFixed(1)} ${y + PH} Z" fill="#3987e5" opacity="0.18"/>`;
+    }
+    sec += `<path d="${wind.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join(' ')}" fill="none" stroke="#86b6ef" stroke-width="2" stroke-linejoin="round"/>`;
+    sec += `<line x1="${PADL}" x2="${W - PADR}" y1="${y + PH}" y2="${y + PH}" stroke="#383835" stroke-width="1"/>`;
+    sec += `<text x="${PADL - 4}" y="${y + 9}" fill="#898781" font-size="8" text-anchor="end">${hi.toFixed(0)}</text>`;
+    panels.push(sec);
+    y += PH + GAP + 8;          // leave room for the next panel's title row
+  }
+
+  // 4 — pressure. Useless as a map layer at this scale, but its trend over two
+  // days is exactly the thing a falling barometer is good for.
+  const pmsl = pick('pmsl');
+  if (pmsl) {
+    let lo = Math.min(...pmsl), hi = Math.max(...pmsl);
+    if (hi - lo < 4) { const m = (hi + lo) / 2; lo = m - 2; hi = m + 2; }
+    const Y = (v) => y + PH - (v - lo) / (hi - lo) * PH;
+    let sec = label(y, t('mg.pressure')) + marks(y, PH);
+    sec += `<path d="${pmsl.map((v, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)} ${Y(v).toFixed(1)}`).join(' ')}" fill="none" stroke="#c3c2b7" stroke-width="1.6" stroke-linejoin="round"/>`;
+    sec += `<text x="${PADL - 4}" y="${Math.max(Y(hi), y) + 9}" fill="#898781" font-size="8" text-anchor="end">${hi.toFixed(0)}</text>`;
+    sec += `<text x="${PADL - 4}" y="${Y(lo).toFixed(1)}" fill="#898781" font-size="8" text-anchor="end">${lo.toFixed(0)}</text>`;
+    panels.push(sec);
+    y += PH + 4;
+  }
+
+  // Shared time axis.
+  let axis = '';
+  for (let i = 0; i < n; i += 6) {
+    const d = new Date(g.times[start + i] + 'Z');
+    axis += `<text x="${X(i).toFixed(1)}" y="${y + 9}" fill="#898781" font-size="8" text-anchor="middle">${String(d.getUTCHours()).padStart(2, '0')}</text>`;
+  }
+  const H = y + 14;
+
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${t('sect.meteogram')}">
+    ${panels.join('')}${axis}</svg>`;
 }
 
 // ── Legend ─────────────────────────────────────────────────────────────────
@@ -908,32 +1152,29 @@ function renderLegend() {
   const scale = (title, unit, gradient, ticks, span) => `
     <div class="legend-row">
       <div class="legend-title"><span>${title}</span> <span class="unit">${unit}</span></div>
-      <div class="ramp" style="background:linear-gradient(90deg,${gradient})"></div>
+      <div class="ramp" style="background:${gradient}"></div>
       <div class="ramp-ticks">${ticks.map(v =>
         `<span style="left:${((v - span[0]) / (span[1] - span[0]) * 100).toFixed(1)}%">${v}</span>`
       ).join('')}</div>
     </div>`;
 
-  let extra = '';
-  if (state.base === 'temp') {
-    extra = scale(t('legend.temp'), '°C',
-      `${TEMP_COLD} 0%, rgba(120,120,120,0.25) 50%, ${TEMP_WARM} 100%`,
-      [-18, -9, 0, 9, 18], [-18, 18]);
-  } else if (state.base === 'precip') {
-    extra = scale(t('legend.precipTitle'), 'mm/h',
-      `rgba(27,175,122,0.12) 0%, ${RAIN} 100%`, [0, 0.5, 1], [0, 1]);
-  } else if (state.base === 'cloud') {
-    extra = scale(t('legend.cloudTitle'), '%',
-      `rgba(226,232,240,0.06) 0%, rgba(226,232,240,0.85) 100%`, [0, 50, 100], [0, 100]);
-  }
-  $('#legendExtra').innerHTML = extra;
+  // Wind always has a scale because the particles are never off; the chosen
+  // field adds a second one whenever it is not already the wind ramp.
+  const cfg = LEGEND_CFG[state.base];
+  $('#legendExtra').innerHTML = cfg
+    ? scale(t('base.' + state.base), cfg.unit, fieldGradient(state.base), cfg.ticks, cfg.span)
+    : '';
 
   const parts = [];
   if (state.layers.gusts) parts.push(...GUST_TIERS.map(([thr, c]) =>
     `<div><i style="background:${c}"></i>${t('legend.gustTier', { v: thr })}</div>`));
-  if (state.base === 'temp') parts.push(
-    `<div><i style="background:#eef2f7"></i>${t('legend.freezing')}</div>`,
+  if (state.base === 'temp' || state.base === 'apparent') parts.push(
+    `<div><i style="background:#eef2f7"></i>${t('legend.freezingLine')}</div>`,
     `<div><i style="background:#d6e0ee"></i>${t('legend.isotherm')}</div>`);
+  if (state.base === 'fog') parts.push(
+    `<div><i style="background:#c9d1de"></i>${t('legend.fog')}</div>`);
+  if (state.base === 'freezing') parts.push(
+    `<div><i style="background:#d6e0ee"></i>${t('legend.fzlLine')}</div>`);
   if (state.base === 'precip') parts.push(
     `<div><i style="background:${RAIN}"></i>${t('legend.rain')}</div>`,
     `<div><i style="background:${SNOW}"></i>${t('legend.snow')}</div>`);
@@ -1028,12 +1269,33 @@ async function loadObs() {
 
 // ── Layer definitions ──────────────────────────────────────────────────────
 // Names and descriptions come from the string table; only the swatch lives here.
-const BASE_SWATCH = {
-  speed:  'linear-gradient(90deg,#1c5cab,#86b6ef)',
-  temp:   `linear-gradient(90deg,${TEMP_COLD},#6a6a66,${TEMP_WARM})`,
-  precip: `linear-gradient(90deg,${RAIN},${SNOW})`,
-  cloud:  'linear-gradient(90deg,#3a3a38,#e2e8f0)',
-  none:   'linear-gradient(90deg,#2c2c2a,#2c2c2a)',
+// Derived from the spec rather than kept in a parallel table, so a swatch can
+// never drift from what the raster actually paints.
+function fieldGradient(k) {
+  const f = FIELDS[k];
+  if (!f) return 'linear-gradient(90deg,#2c2c2a,#2c2c2a)';
+  const c = f.rgb;
+  const rgba = (a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+  switch (f.kind) {
+    case 'ramp':    return 'linear-gradient(90deg,#1c5cab,#5598e7,#b7d3f6)';
+    case 'diverge': return `linear-gradient(90deg,${TEMP_COLD},rgba(120,120,120,0.25),${TEMP_WARM})`;
+    case 'precip':  return `linear-gradient(90deg,rgba(27,175,122,0.12),${RAIN})`;
+    case 'seqInv':  return `linear-gradient(90deg,${rgba(0.95)},${rgba(0.06)})`;
+    default:        return `linear-gradient(90deg,${rgba(0.06)},${rgba(0.95)})`;
+  }
+}
+
+// Units and tick positions per field — the only thing the spec cannot infer.
+const LEGEND_CFG = {
+  temp:       { unit: '°C',   ticks: [-18, -9, 0, 9, 18], span: [-18, 18] },
+  apparent:   { unit: '°C',   ticks: [-18, -9, 0, 9, 18], span: [-18, 18] },
+  humidity:   { unit: '%',    ticks: [45, 70, 100],       span: [45, 100] },
+  fog:        { unit: '°C',   ticks: [0, 2.5, 5],         span: [0, 5] },
+  precip:     { unit: 'mm/h', ticks: [0, 0.5, 1],         span: [0, 1] },
+  cloud:      { unit: '%',    ticks: [0, 50, 100],        span: [0, 100] },
+  visibility: { unit: 'km',   ticks: [0, 10, 20],         span: [0, 20] },
+  snowdepth:  { unit: 'cm',   ticks: [0, 25, 50],         span: [0, 50] },
+  freezing:   { unit: 'm',    ticks: [0, 1200, 2400],     span: [0, 2400] },
 };
 const OVERLAY_SWATCH = {
   particles: 'linear-gradient(90deg,#1c5cab,#cde2fb)',
@@ -1044,7 +1306,7 @@ const OVERLAY_SWATCH = {
 function buildLayerToggles() {
   const field = BASE_FIELDS.map(k =>
     `<label class="lay"><input type="radio" name="basefield" data-base="${k}" ${state.base === k ? 'checked' : ''}>
-      <span class="lay-sw" style="background:${BASE_SWATCH[k]}"></span>
+      <span class="lay-sw" style="background:${fieldGradient(k)}"></span>
       <span><span class="lay-t">${t('base.' + k)}</span><br>
         <span class="lay-d">${t('base.' + k + '.d')}</span></span></label>`).join('');
 
@@ -1213,12 +1475,18 @@ function applyURLParams() {
     const chip = e.target.closest('[data-base]');
     if (chip) setBase(chip.dataset.base);
   });
-  try {
-    await loadGrid();
-  } catch (err) {
-    toast(t('toast.gridFail', { err: err.message }), 8000);
-    console.error(err);
-    return;
+  // A cold server paces its upstream chunks, so the grid can be up to a couple
+  // of minutes away on first boot. Wait it out rather than showing a dead map.
+  for (let attempt = 0; ; attempt++) {
+    try { await loadGrid(); break; } catch (err) {
+      if (attempt >= 12) {
+        toast(t('toast.gridFail', { err: err.message }), 8000);
+        console.error(err);
+        return;
+      }
+      if (attempt === 0) toast(t('toast.loadingField'), 4000);
+      await new Promise(r => setTimeout(r, 12000));
+    }
   }
 
   raster = new RasterLayer();
@@ -1234,6 +1502,11 @@ function applyURLParams() {
 
   loadObs().catch(err => { toast(t('toast.obsFail', { err: err.message }), 6000); console.error(err); });
 
+  // Warm the lazy bundle in the background: the first paint does not need it,
+  // but the detail tiles and the meteogram's feels-like trace do, and by the
+  // time anyone reads that far it has arrived.
+  setTimeout(() => ensureExtra().then(() => { renderNow(); }).catch(() => {}), 1200);
+
   // Observations update hourly; the grid every ten minutes on the server.
   setInterval(() => loadObs().catch(() => {}), 90_000);
   setInterval(async () => {
@@ -1241,6 +1514,9 @@ function applyURLParams() {
       const fresh = await get('/api/grid');
       if (fresh.meta.generated === state.grid.meta.generated) return;
       state.grid = fresh;
+      const hadExtra = state.extraLoaded;
+      state.extraLoaded = false;
+      if (hadExtra) ensureExtra().catch(() => {});
       computeNowIndex();
       $('#timeSlider').max = String(fresh.times.length - 1);
       setTime(state.tIndex);
